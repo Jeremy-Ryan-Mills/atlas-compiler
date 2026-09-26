@@ -1,311 +1,358 @@
-# atlas-rtlgraph: Deriving the Scheduling Graph from Atlas RTL via CIRCT
+# atlas-rtlgraph: Deriving an Instruction Scheduling Model from RTL
 
-Planning document. No code yet.
+Planning document, updated 2026-09-25 by static inspection of the current compiler and selected Atlas RTL, with external design references. The initial S0 prototype now replays `chipyard.AtlasShuttleVectorConfig` elaboration from the cached Chipyard generator JAR, lowers and verifies CIRCT hardware IR, records provenance, and queries typed scalar-to-MXU1 command wiring. The JAR's correspondence to current source revisions remains unverified. The scheduling-model extractor, serialized schema, and machine-selection interface below remain proposed work. No RTL simulations, timing proofs, or performance measurements were performed.
 
-Companion to `PLAN.md` (`atlas-opt`). That plan builds a dependency graph over **kernel
-instructions** and schedules it. Its edge weights and resource rules come from a
-machine description that is hand-copied from `npu_model` and then calibrated against
-`npu_model` (PLAN.md §1.2, §1.4, §7.1). This project asks a different question:
+Source links target inspected passages where available. Local anchors refer to this checkout; external references should use immutable revisions when available. Unverified sources retain file-level links.
 
-> Given the Atlas Chisel RTL lowered into CIRCT, can an agentic framework **derive**
-> that machine description, meaning the resource graph, the per-instruction timing,
-> and the pairwise dependency distances, from the hardware itself? The result would
-> make the RTL, not the Python model, the source of truth for `atlas-opt`.
+The goal is to derive a compiler's timing and hazard model from hardware evidence: which operands an instruction accesses, when those accesses occur, which resources it occupies, and which launch conditions software must satisfy. The lookup tables describe instruction scheduling, not FPGA lookup-table cells.
 
-Sources surveyed: `npu_model/npu_spec/00–06`; `npu_model/hardware/{scoreboard,
-bank_conflict,idu}.py`; `npu_model/npu_model/out.scala` (the generated Chisel decode
-table); `PLAN.md`; and in Merlin (`ucb-bar/merlin@refactor/merlin-phase-architecture-clean`)
-the README, `docs/design/rtl_derived_compiler_tooling.md`, `docs/guides/targetgen.md`,
-`docs/design/{command_stream_reorder_emitter,macro_scheduling,compiler_plane}.md`,
-`merlin/contract/schemas/rtl_facts.schema.json`, `build_tools/scripts/check_isa_matches_rtl.py`,
-and `examples/atlas/**` (including `target/descriptor.yaml` and
-`phase1/contracts/hwbringup_atlas_v0/schedule_contract.yaml`).
+The initial consumer is the existing `atlas-opt` compiler. Its [PLAN.md](PLAN.md#L11-L20) describes a scheduler targeting [npu_model's rtl-match branch](https://github.com/ucb-ee194-tapeout/npu_model/tree/rtl-match); the [current machine interface](../../src/core/machine.h#L17-L97) is the compatibility baseline. That model already includes row-timed accesses, pipelined MXUs, logical reservations, and physical-resource checks. The project replaces or corroborates those facts with evidence from a pinned RTL configuration; it does not begin from a completion-only, nonpipelined model.
 
----
+The selected full-system target is `chipyard.AtlasShuttleVectorConfig`, defined in [AtlasConfigs.scala](../../../chipyard/config/AtlasConfigs.scala#L40-L48). Use the enclosing Chipyard checkout's actual submodule origins (§2.4), including its course-specific TestChipIP, Saturn, Shuttle, and Rocket Chip repositories. Section 4.1 records the configuration composition and remaining elaboration assumptions.
 
-## 1. Two graphs, and which one this project produces
+S0 prototype results: the [build and query guide](../../docs/rtlgraph-s0.md) records the tested direct Java/CIRCT 1.75.0 flow, compiler contract checklist, provenance limits, external-module census, and typed issue-to-command query. Fresh replay, independent IR verification, target wiring checks, and structural fixtures passed. Generated artifacts are under `build/rtlgraph-s0/` and `build/rtlgraph-s0-replay/`, outside this context directory. Full S0 remains open for current-source lineage, simulation/environment contracts, and a functional RTL smoke case. This prototype establishes structural connectivity, not MXU acceptance conditions or instruction timing.
 
-"A graph similar to the other agent's" can mean two things. This project produces
-the first graph and projects it onto the second.
+## 1. Deliverable and the roles of the graphs
 
-| | **Hardware Resource-Timing Graph (RTG)** | **Instruction Interaction Graph (IIG)** |
-|---|---|---|
-| Nodes | Architectural storage (x/m/e RFs and their SRAM banks, weight slots, acc buffers, VMEM banks, `dma.base`, channel-busy bits) and functional units (MXU0/1 sequencers, VPU, XLU, LSU, DMA engines, IDU) | ISA mnemonics (op classes) |
-| Edges | Datapaths and control paths in the netlist, annotated with sequential depth, port counts, and FSM occupancy | For a pair `(A, B)` sharing a resource: the minimum issue distance `d(A,B)` and its kind (RAW/WAR/WAW/bank/unit) |
-| Derived from | CIRCT `hw`/`comb`/`seq` IR, plus simulation | Projecting the RTG through the decoder |
-| Consumer | Humans, the agent, and discrepancy reports | `atlas-opt`: it **is** PLAN.md's §1.2 latency table plus the §5.1 edge-distance table |
-
-`atlas-opt` then instantiates the IIG over a concrete kernel to get the per-kernel
-dependency graph. That part is unchanged. The deliverable here is the **machine
-description**, built from RTL evidence instead of transcription.
-
-A stretch goal (§6, S7) observes the **dynamic** per-kernel dependency graph directly in
-RTL simulation and diffs it against the static graph `atlas-opt` builds.
-
----
-
-## 2. Merlin, and how this project differs
-
-### 2.1 What Merlin does
-
-Merlin is a *compiler-generation* framework. Its phases are Phase 0 (derive test
-"capsules" from hardware), Phase 1 (an agent authors a functional backend compiler,
-graded by oracles), and Phase 2 (optimize that compiler). TargetGen ingests docs and
-Chisel and deterministically emits target dialect and lowering scaffolding. It has no
-LLM; the agent is the compiler author in Phase 1.
-
-Its RTL path (`rtl_derived_compiler_tooling.md`) works like this:
-
-- It elaborates with `firtool --ir-hw`, walks the `circt-opt` HW graph, and finds the
-  decoder through `comb.icmp eq` fan-out.
-- It extracts **static structural facts**: mesh DIM, scratchpad/accumulator capacity,
-  datapath dtypes, and the legal opcode/funct set. These are schema'd in
-  `rtl_facts.schema.json` (`family: circt_static`).
-- It uses those facts as **preconditions for lowering passes above the ISA**: tile to
-  DIM, fit capacity, emit only legal functs, and configure before use. The facts are
-  also compiled into FileCheck assertions that pre-screen agent-emitted kernels.
-- It uses the arcilator model built from the same RTL (`libatlas_model.so`) as the
-  cycle-level oracle.
-
-### 2.2 The gap this project targets
-
-Merlin's own accounting names the gap: RTL-derived checks catch legality and structure,
-while "bank conflicts, DMA backpressure, pipeline interlocks … are verilator-only."
-Merlin extracts *what the hardware is*, not *when things happen*.
-
-For Atlas specifically, Merlin's `schedule_contract.yaml` already has the right shape:
-`minimum_issue_gap` and `register_dependency_gap` entries per producer/consumer class,
-with cycle counts. However, its `evidence.sources` fields cite
-`npu_model/hardware/{lsu,vpu,mxu}.py`, not the RTL. The timing contract is still
-transcribed from the Python model. The same descriptor also records RTL-vs-model
-disagreements: `AtlasMemMap.VMEM_SIZE` is 1.5 MiB in RTL but 1 MiB in the model config,
-and the MRF capacity obligation is "undecidable". That is direct evidence that the
-model and the RTL drift.
-
-### 2.3 Side-by-side
-
-| Axis | Merlin (RTL, then compiler generation) | This project (RTL, then scheduling graph) |
-|---|---|---|
-| Position in the stack | **Above** the ISA: frontend → target dialect → lowering → encoding | **Below** the ISA: instruction order, issue timing, and `delay` insertion for a fixed ISA program |
-| Kind of fact | Static and structural: DIM, capacity, legal encodings, config-before-use | Temporal and microarchitectural: operand read/commit cycles, unit occupancy, initiation interval, port/bank conflicts, interlock vs. no-interlock |
-| Why facts matter | A wrong DIM or capacity gives aliasing and wrong results | On a statically scheduled machine without hazard checking, a wrong latency or WAR window **also** gives silently wrong results, and an over-conservative one costs cycles |
-| Main CIRCT analysis | Decoder fan-out; memory/SRAM census; parameter constants | Decoder → control-signal → unit mapping; sequential-depth and FSM analysis on datapaths from RF ports to RF ports; ready/valid backpressure paths into the IDU |
-| Role of simulation | Oracle for grading generated compilers | **Witness** for every derived timing fact, including a tightness check at `d-1` |
-| Role of the agent | Writes the compiler and is graded by oracles | Navigates the netlist, forms hypotheses (which FSM is the MXU sequencer, when `mdst` is written), writes queries and micro-kernels, and reconciles conflicts. It is graded by simulation witnesses |
-| Determinism | TargetGen is deterministic; the agent is only in Phase 1 | The extractor core is deterministic C++ over CIRCT. The agent only proposes, and every accepted fact carries a machine-checked witness |
-| Output artifact | Dialects, lowering passes, encoders, FileCheck tests | A machine description (`atlas.rtl.yaml`) consumed by `atlas-opt`, plus an RTG `.dot` and a discrepancy report |
-| Ceiling | A correct, then fast, compiler from high-level models | A provably safe and tight schedule for hand-written or generated `.S` |
-
-The two are **complementary**. Merlin's Phase 2 optimizer and its
-`command_stream_reorder_emitter` both need exactly this timing contract. This project
-could become the RTL-evidence producer for Merlin's `schedule_contract.yaml`, which would
-move its `evidence.kind` from `target_execution_unit` (Python) to an RTL-derived kind.
-
----
-
-## 3. What must be derived
-
-These are the facts `atlas-opt` needs. Each row is keyed to the PLAN.md item it replaces
-or verifies.
-
-| # | Fact | Where it lives in RTL (hypothesis) | Replaces / verifies |
-|---|---|---|---|
-| F1 | Mnemonic → unit, operand roles (reads/writes, pair span, implicit state) | Decode table (`AtlasDecode` in `out.scala`: `msrc1`, `msrc2`, `mdst`, `acc_read`, `acc_write`, `mxu_0_valid`, …) | PLAN §4.1 footprint; D2, D3, D8 |
-| F2 | Issue → **operand-read** cycle window, per source operand | RF read-port enable timing relative to issue | PLAN §1.3-1. PLAN assumes reads happen at completion, which makes WAR cost `L`. If the RTL reads at issue, WAR drops to ~1. This is the largest potential win |
-| F3 | Issue → **result-commit** cycle, per destination | RF / acc / VMEM write-enable timing | PLAN §1.2 latency table (RAW distance) |
-| F4 | Unit occupancy and initiation interval | Sequencer FSM / counter busy duration; `ready` back to IDU | PLAN §1.3-3 ("not pipelined in the model") |
-| F5 | Interlocks the hardware actually enforces | ready/valid or stall paths from units into the IDU `issue` condition | Which edges are correctness edges and which are only performance edges. Also D4 ("blocking" transfers) |
-| F6 | Bank/port structure: SRAM banks, read/write port counts, arbitration | `seq.firmem` / `*_ext` SRAM instances, their addressing, and muxes into them | PLAN §1.3-2 and open question 2: is RAR on the same `m` register really a conflict? |
-| F7 | XLU as a separate unit or shared with the VPU | Instance hierarchy and issue-valid signals (`xlu_valid` exists in the decode table) | D1 |
-| F8 | DMA timing: queue depth, per-channel vs. shared engine, latency formula in bytes | DMA engine FSMs and TileLink/off-chip interface | PLAN §1.3-4, D7, and the DMA row of §1.2 |
-| F9 | `delay N` semantics: exact issue-to-issue distance | IDU countdown register | PLAN §1.3-7, §5.4 |
-| F10 | Control flow: delay-slot count and redirect timing | `PcControl` / branch unit | PLAN §1.3-6 |
-| F11 | Capacities and address maps (VMEM size, MRF size) | Parameter constants, SRAM depths | Merlin descriptor's VMEM 1.5 vs 1 MiB conflict |
-
-F2, F4, F5, and F6 are where an RTL-derived model is most likely to beat the Python
-model. They are also the facts Merlin does not extract.
-
----
-
-## 4. Architecture
-
-```
- Atlas Chisel (chipyard_atlas, AtlasRocketConfig, generator=atlas)
-   │  sbt elaborate → .fir (with @[...scala] source locators)
-   ▼
- firtool (names and aggregates preserved; also emit Verilog + arcilator model)
-   │  → atlas_hw.mlir   (hw / comb / seq, locations intact)
-   ▼
-┌──────────────────── deterministic extractor (C++, CIRCT) ───────────────────┐
-│ E1 census       instance tree, regs, mems/SRAM banks, ports, ready/valid    │
-│ E2 decode       opcode BitPat → control-signal vector (icmp fan-out)       │
-│ E3 netgraph     bit-level → signal-level graph; seq depth on every edge     │
-│ E4 path query   "from RF read port P to unit U": depth, enables, muxes     │
-│ E5 fsm          recover FSMs/counters driving busy/valid; bounds (BMC)     │
-└──────────────────────────────┬──────────────────────────────────────────────┘
-                               │ tool API (CLI + JSON)
-┌──────────────────────────────▼───────────── agent layer ────────────────────┐
-│ Navigator   maps spec concepts → modules/signals (uses scala locators)     │
-│ Extractor   proposes a fact + the queries that justify it                  │
-│ Witness     writes micro-kernels; runs arcilator/verilator; checks d, d-1  │
-│ Reconciler  diffs vs npu_model, spec, Merlin contract; files discrepancies │
-└──────────────────────────────┬──────────────────────────────────────────────┘
-                               ▼
- Fact ledger (every fact: value, status, provenance, witness)
-   │  project RTG → IIG
-   ▼
- atlas.rtl.yaml  ──►  atlas-opt (--machine=rtl)        + rtg.dot + discrepancies.md
+```text
+AtlasShuttleVectorConfig + pinned RTL + environment assumptions
+    -> elaborated CIRCT hardware IR
+    -> structural and temporal analysis
+    -> Hardware Resource-Timing Graph (RTG) + evidence ledger
+    -> instruction access profiles, launch rules, resource constraints
+    -> canonical machine description (proposed atlas.rtl.yaml)
+         -> atlas-opt adapter
+              + kernel operands, addresses, and control flow
+              -> dependency graph + resource reservations -> schedule
+         -> optional Merlin contract adapter
+         -> interaction graphs, traces, and discrepancy reports
 ```
 
-### 4.1 Why deterministic tools plus an agent, rather than either one alone
+| Representation | Meaning | Use |
+| --- | --- | --- |
+| Hardware Resource-Timing Graph (RTG) | Storage, ports, engines, queues, and control state connected by data/control paths, with guards and event timing | Explain and trace extracted facts back to hardware |
+| Instruction profiles and rules | Operand/configuration-dependent reads, writes, visibility, reservations, capacities, and acceptance/completion behavior | Canonical compiler-facing model |
+| Instruction Interaction Graph (IIG) | A derived view of relationships between instruction classes under stated operand/resource predicates | Inspect dependencies and export representable pairwise rules |
+| Kernel dependency graph and reservation table | Concrete instruction instances, resolved aliases, precedence distances, and per-cycle occupancy | Existing compiler scheduling machinery |
 
-- **Pure static analysis is not enough.** Mapping "the cycle `vmatmul.mxu1` commits
-  `acc0`" onto the netlist requires knowing which register is the MXU1 sequencer's
-  state, which decoded bit starts it, and which write-enable is `acc0`. Names survive
-  only partially after lowering. Counter bounds are often parameters threaded through
-  several modules, and some latencies are data-dependent (DMA bytes). This is
-  navigation and hypothesis work, which suits an agent.
-- **A pure agent is not trustworthy.** An LLM reading Chisel will confidently report 35
-  cycles because the spec says 35. So the rule is: **the agent proposes, tools and
-  simulation dispose.** A fact is `VERIFIED` only when a machine-checked witness passes:
-  a CIRCT query result plus a simulation at the claimed distance, and, for distances, a
-  detectable failure or monitor fire at `d-1` to prove tightness.
-- This mirrors Merlin's stance ("derive, never hardcode"; fail-closed `UNKNOWN`, which is
-  "NOT a pass"), applied to a different fact class.
+The IIG is a projection, not a sufficient replacement for the profiles and resource constraints. A table indexed only by mnemonic pairs loses operand aliasing, physical-bank relationships, repeated accesses, and resource capacity shared by more than two instructions. DOT output is a debugging view, not the machine description.
 
-### 4.2 Toolchain choices
+The initial scope is Atlas scheduling-model extraction and integration. Radiance/Muon and Vortex are portability targets (§8), beginning with small analysis/import experiments. Full dynamic kernel-graph reconstruction remains a later extension; event instrumentation is needed much earlier.
 
-- **Extractor core: C++ against CIRCT**, as `circt-opt` analysis passes plus a small
-  query CLI (`atlas-rtl-query`). This matches `atlas-opt`'s C++20/CMake stack so the
-  two can share `isa.def` / the machine-description loader. Python bindings are an
-  acceptable prototyping path.
-- **Agent orchestration:** the Claude Agent SDK (or Claude Code with an `AGENT.md`) and
-  a fixed tool set: `rtl-query`, `rtl-grep-scala`, `assemble` (reuse `npu_model`'s
-  assembler), `sim-arc`, `sim-verilator`, `bmc`, and `ledger-write`. No free shell during
-  graded runs.
-- **Simulation:** arcilator first (fast, already used by Merlin as the Atlas oracle),
-  verilator for anything arcilator can't model, and `circt-bmc` for bounded questions
-  like "can `mxu1.busy` fall before cycle 35 after issue?".
-- **Monitors:** SystemVerilog-free hazard monitors, attached at the harness level or as
-  inserted `seq` probes, that flag RF-bank double access, unit issue while busy, and
-  reads of in-flight destinations. These turn silent corruption at `d-1` into a
-  detectable signal. Wrong-value detection alone misses cases where stale and new data
-  happen to be equal.
+## 2. Current baseline and evidence hierarchy
 
----
+### 2.1 What the compiler actually consumes
 
-## 5. Fact ledger and output format
+Begin with the [machine interface](../../src/core/machine.h#L17-L97), [reservation interface](../../src/core/reservations.h#L9-L43), [profile construction](../../src/core/machine.cpp#L151-L399), and [graph construction](../../src/core/depgraph.cpp#L58-L110). The table identifies narrower definitions and implementation rules.
 
-Each fact carries its evidence. The statuses are `VERIFIED` (a witness passed),
-`DERIVED` (static evidence only), `UNKNOWN` (fail-closed, and `atlas-opt` must fall back
-to conservative values), and `CONFLICT` (sources disagree; see the report).
+| Current representation | Semantics the adapter must preserve | Source |
+| --- | --- | --- |
+| `Access` | Storage kind, element range, read/write direction, starting age and per-element step, unknown-address aliasing, and accesses tied to completion rather than a fixed age | [machine.h](../../src/core/machine.h#L17-L31) |
+| `Hold` | Resource identity, inclusive occupancy interval, and an alternative resource index when either resource may be selected | [machine.h](../../src/core/machine.h#L33-L55) |
+| `Footprint` | Accesses and holds; logical MREG read/write sets and release ages; `vload`'s write-during-read exception; VPU lifetime; final fixed resource-use age; estimated DMA cycles; operand legality | [machine.h](../../src/core/machine.h#L57-L68) |
+| `dependence()` | RAW/WAR/WAW timing plus logical-reservation and operand-sensitive sequencer rules | [machine.cpp](../../src/core/machine.cpp#L418-L517) |
+| `ReservationTable` | Resource capacities, physical MREG ports and sharing rules, VPU slots, and widening reservations across variable DMA waits | [reservations.cpp](../../src/core/reservations.cpp#L5-L78), [wait widening](../../src/core/reservations.cpp#L100-L113) |
+| Other machine behavior | VPU incompatible operation groups, bank mapping, address units, DMA channels/FIFO/waits, barriers, frontend timing, and completion obligations | [barriers/VPU](../../src/core/machine.cpp#L29-L60), [address mapping](../../src/core/machine.cpp#L117-L147), [DMA/frontend simulation](../../src/core/simulator.cpp#L161-L250) |
+
+Profile templates must be instantiated using actual operands and known scalar values. Preserve implicit operands, register-pair expansion, repeated row streams, alignment checks, byte-versus-word addresses, and unknown-address behavior; see [access/hold construction and address mapping](../../src/core/machine.cpp#L64-L147). RAR creates no data-precedence edge, but simultaneous reads can still contend for a physical port.
+
+The model boundary is distributed across code. `unitCapacity()` ([capacity rules](../../src/core/machine.cpp#L12-L15)), `vpuCanOverlap()` ([overlap rules](../../src/core/machine.cpp#L29-L60)), bank mapping, same-cycle visibility, MXU launch rules, and DMA/frontend semantics are not all fields of `Footprint`. [The CLI parser](../../src/tool/main.cpp#L35-L59) has no YAML loader or `--machine` option today. Integration therefore includes introducing a model interface and adapting all affected consumers, not merely adding a loader.
+
+The [current README](../../README.md#L38-L54) also documents automatic DMA-wait insertion and `# atlas.release` completion markers. Preserve those obligations in [insert_dma_waits.cpp](../../src/passes/insert_dma_waits.cpp#L86-L105), [schedule.cpp](../../src/passes/schedule.cpp#L102-L122), and [simulator.cpp](../../src/core/simulator.cpp#L120-L144). The checker shares [footprint/dependence checking](../../src/core/simulator.cpp#L146-L159), and [resource checks](../../src/core/simulator.cpp#L209-L218), with the scheduler: agreement checks consistency with the model, not independent correctness of that model against RTL.
+
+[PLAN.md](PLAN.md#L397-L402) mixes implemented behavior and future design: it describes list, exact, and modulo scheduling, while [schedule.cpp](../../src/passes/schedule.cpp#L16-L88) implements the current per-block list scheduler. Treat implementation as the source for interface compatibility and independently pinned RTL as the source for hardware claims.
+
+### 2.2 Hardware observations that guide extraction
+
+The following are static observations from the enclosing Atlas repository's `src/main/scala` tree. They do not establish exact extracted timing profiles, and must not silently be attributed to a different `third_party/atlas-npu` revision. The shared [architecture notes](../../../../../.agents/architecture.md#L3-L11) provide navigation and their own inspection baseline.
+
+| Observation | Source and consequence |
+| --- | --- |
+| Frontend issue is distinct from engine acceptance | [ScalarCore.scala](../../../src/main/scala/atlas/scalar/ScalarCore.scala#L226-L249) defines `s1_fire` and the `delay`/`dma.wait` stall causes; [engine launch assignments](../../../src/main/scala/atlas/scalar/ScalarCore.scala#L489-L533) generate engine valids. Trace launch and acceptance separately when defining age zero |
+| Gating a rejected command is not a retry mechanism | [SA interface](../../../src/main/scala/atlas/mxu/sa/SystolicArraySequencer.scala#L47-L63), and [acceptance/assertions](../../../src/main/scala/atlas/mxu/sa/SystolicArraySequencer.scala#L289-L333); [IPT interface](../../../src/main/scala/atlas/mxu/ipt/InnerProductTreesSequencer.scala#L29-L64), and [acceptance/assertions](../../../src/main/scala/atlas/mxu/ipt/InnerProductTreesSequencer.scala#L301-L363). Both gate acceptance and assert illegal launches without command backpressure/retry |
+| MXUs stream rows and track multiple operations | SA: [port/FIFO/guard state](../../../src/main/scala/atlas/mxu/sa/SystolicArraySequencer.scala#L179-L301), [row reads](../../../src/main/scala/atlas/mxu/sa/SystolicArraySequencer.scala#L444-L459), [writeback](../../../src/main/scala/atlas/mxu/sa/SystolicArraySequencer.scala#L609-L640). IPT: [port/FIFO/guard state](../../../src/main/scala/atlas/mxu/ipt/InnerProductTreesSequencer.scala#L170-L319), [row reads](../../../src/main/scala/atlas/mxu/ipt/InnerProductTreesSequencer.scala#L478-L497), [writeback](../../../src/main/scala/atlas/mxu/ipt/InnerProductTreesSequencer.scala#L647-L679). A single busy duration is insufficient |
+| Logical register identity differs from physical contention | [MregParams.scala](../../../src/main/scala/atlas/common/MregParams.scala#L36-L42) defines the 64-register/32-bank geometry; [bank/row mapping functions](../../../src/main/scala/atlas/common/MregParams.scala#L72-L78) map `m_i` and `m_(i+32)` to distinct rows of the same bank |
+| DMA captures command fields before completion | [ScalarCore.scala](../../../src/main/scala/atlas/scalar/ScalarCore.scala#L503-L509) forms resolved address/size/channel fields; [DMA.scala](../../../src/main/scala/diplomatic/memory/DMA.scala#L223-L245) queues the command and later uses saved fields. Reconcile the compiler/model's completion-time operand accesses, tracing the full command path before assigning an exact capture age |
+| DMA completion and memory contention are event-dependent | [DMA.scala](../../../src/main/scala/diplomatic/memory/DMA.scala#L291-L320) retires beats and clears channel busy after dispatch/retirement conditions. [VMEM priority selection](../../../src/main/scala/diplomatic/memory/VMEM.scala#L168-L180) and [ordered arbitration/grants](../../../src/main/scala/diplomatic/memory/VMEM.scala#L267-L305) place LSU traffic ahead of DMA |
+
+The existing model is a useful comparison baseline, including its RTL trace fixtures. Its assumptions are not extraction results. In particular, [PLAN.md](PLAN.md#L105-L110) treats MXU0/MXU1 as interchangeable for the compiler baseline, while the [shared architecture notes](../../../../../.agents/architecture.md#L38-L40) require preserving engine-specific arithmetic, quantization, and accumulation order. Timing extraction cannot prove numerical interchangeability. Begin RTL validation with schedules that preserve engine assignments and use appropriate functional references.
+
+### 2.3 Relationship to Merlin
+
+The original survey used `ucb-bar/merlin@refactor/merlin-phase-architecture-clean`, particularly its [Atlas schedule contract](https://github.com/ucb-bar/merlin/blob/refactor/merlin-phase-architecture-clean/examples/atlas/phase1/contracts/hwbringup_atlas_v0/schedule_contract.yaml) and [CIRCT fact extractor](https://github.com/ucb-bar/merlin/blob/refactor/merlin-phase-architecture-clean/src/merlin/targetgen/rtl/circt_introspect.py). That survey reported structural RTL facts and `minimum_issue_gap`/`register_dependency_gap` timing entries whose evidence pointed to Python execution units. These are branch-specific comparison references; their contents were not revalidated during this update, and must be pinned and checked before integration.
+
+The intended contribution is an evidence producer for `atlas-opt`, with an optional future adapter to Merlin. Retain rich profiles and rules in the canonical format; if the adapter is pursued, export the subset Merlin's chosen contract supports. An adapter must report lost precision or reject an unsupported correctness constraint. A minimum-gap contract cannot automatically express every Atlas reservation rule. The original survey's capacity discrepancies also need revision-specific reconciliation; the [current Atlas compiler](../../src/core/machine.h#L12-L15) already models 1.5 MiB VMEM.
+
+Merlin's [command-stream reorder design](https://github.com/ucb-bar/merlin/blob/refactor/merlin-phase-architecture-clean/docs/design/command_stream_reorder_emitter.md) is a secondary reference. Inspect its target's interlocking and command-acceptance semantics before transferring scheduling assumptions to Atlas.
+
+An optional reference checkout at `third_party/merlin` would be useful for inspecting the fact extractor, contract schemas, and validation examples locally, comparing versions, and citing exact source ranges. Record its selected branch and immutable commit; the surveyed refactor branch above is the initial reference to evaluate. This is a proposed reference location, not an existing checkout or a compiler build/runtime dependency. Normal builds and tests must work without it, and reference initialization remains optional. Exclude timing-bearing reference material from blind extraction runs (§7).
+
+### 2.4 External repositories and branches
+
+The enclosing Chipyard root `.gitmodules` is authoritative for the configured origins of this system's source checkouts; the compiler's separate [.gitmodules](../../.gitmodules#L1-L4) declares only the NPU model reference submodule. The root manifest was inspected at `/tools/C/reednicolas/ee194-sp26-chipyard/.gitmodules`; the relative links below point to the same file in this workspace. Distinguish the enclosing Atlas target repository from any optional Atlas comparison checkout. The rewritten compiler history does not register `third_party/atlas-npu` as a submodule.
+
+The URLs below are manifest mappings, not a claim that all repositories are used by every configuration. A `branch` entry is a tracking choice, not an immutable pin; an omitted branch does not imply `main` or `master`. Record the parent gitlink and actual checked-out revision for each relevant submodule, plus any local source changes, when producing extraction artifacts.
+
+| Project | Repository or branch | Relevant documentation |
+| --- | --- | --- |
+| NPU model | [ucb-ee194-tapeout/npu_model — rtl-match](https://github.com/ucb-ee194-tapeout/npu_model/tree/rtl-match) | [RTL timing notes](https://github.com/ucb-ee194-tapeout/npu_model/blob/rtl-match/docs/rtl-timing.md), [RTL trace fixtures and validation](https://github.com/ucb-ee194-tapeout/npu_model/blob/rtl-match/tests/rtl/README.md) |
+| Atlas target: `generators/sp26-atlas-acc` | `git@bwrcrepo.eecs.berkeley.edu:ee194-290c-sp26/sp26-atlas-acc.git`; no branch specified | [Root manifest](../../../../../.gitmodules#L164-L166); [selected config](../../../chipyard/config/AtlasConfigs.scala#L40-L48) |
+| Atlas optional comparison reference | [ucb-bar/atlas-npu](https://github.com/ucb-bar/atlas-npu) | Not a registered compiler submodule or build dependency; any selected revision must not be substituted for the enclosing Atlas target |
+| TestChipIP: `generators/testchipip` | [ucb-ee194-tapeout/testchipip](https://github.com/ucb-ee194-tapeout/testchipip); no branch specified | [Root manifest](../../../../../.gitmodules#L56-L58) |
+| Saturn: `generators/saturn` | [ucb-ee194-tapeout/saturn-vectors — bf16_fp8](https://github.com/ucb-ee194-tapeout/saturn-vectors/tree/bf16_fp8) | [Root manifest](../../../../../.gitmodules#L167-L170); the selected vector parameters are specified in §4.1 |
+| Shuttle: `generators/shuttle` | [ucb-ee194-tapeout/shuttle](https://github.com/ucb-ee194-tapeout/shuttle); no branch specified | [Root manifest](../../../../../.gitmodules#L174-L176) |
+| Rocket Chip: `generators/rocket-chip` | [ucb-ee194-tapeout/rocket-chip](https://github.com/ucb-ee194-tapeout/rocket-chip); no branch specified | [Root manifest](../../../../../.gitmodules#L177-L179) |
+| Diplomacy: `generators/diplomacy` | [chipsalliance/diplomacy](https://github.com/chipsalliance/diplomacy) | [Root manifest](../../../../../.gitmodules#L19-L21) |
+| HardFloat: `generators/hardfloat` | [ucb-bar/berkeley-hardfloat](https://github.com/ucb-bar/berkeley-hardfloat) | [Root manifest](../../../../../.gitmodules#L29-L31) |
+| Inclusive cache: `generators/rocket-chip-inclusive-cache` | [chipsalliance/rocket-chip-inclusive-cache](https://github.com/chipsalliance/rocket-chip-inclusive-cache) | [Root manifest](../../../../../.gitmodules#L53-L55) |
+| CDE: `tools/cde` | [chipsalliance/cde](https://github.com/chipsalliance/cde) | [Root manifest](../../../../../.gitmodules#L107-L109) |
+| Radiance / Muon: `generators/radiance` | [ucb-bar/radiance — main](https://github.com/ucb-bar/radiance/tree/main) | [Root manifest](../../../../../.gitmodules#L152-L155); [Muon](https://github.com/ucb-bar/radiance/blob/main/docs/muon.md), [issue](https://github.com/ucb-bar/radiance/blob/main/docs/issue.md), [register mapping](https://github.com/ucb-bar/radiance/blob/main/docs/rename.md) |
+| Vortex | [vortexgpgpu/vortex — master](https://github.com/vortexgpgpu/vortex/tree/master) | [Microarchitecture](https://github.com/vortexgpgpu/vortex/blob/master/docs/designs/microarchitecture.md), [scoreboard RTL](https://github.com/vortexgpgpu/vortex/blob/master/hw/rtl/core/VX_scoreboard.sv) |
+| Merlin (optional local reference: `third_party/merlin`) | [ucb-bar/merlin — surveyed refactor branch](https://github.com/ucb-bar/merlin/tree/refactor/merlin-phase-architecture-clean) | [Atlas schedule contract](https://github.com/ucb-bar/merlin/blob/refactor/merlin-phase-architecture-clean/examples/atlas/phase1/contracts/hwbringup_atlas_v0/schedule_contract.yaml); see §2.3 for survey scope and reference-only use |
+| CIRCT: `tools/circt` | [llvm/circt](https://github.com/llvm/circt) | [Root manifest](../../../../../.gitmodules#L110-L112); [Getting Started](https://circt.llvm.org/docs/GettingStarted/), [SystemVerilog frontend](https://circt.llvm.org/docs/Tools/circt-verilog/), [bounded model checking](https://circt.llvm.org/docs/Tools/circt-bmc/) |
+| LLVM / MLIR | [llvm/llvm-project](https://github.com/llvm/llvm-project) | [MLIR IR traversal](https://mlir.llvm.org/docs/Tutorials/UnderstandingTheIRStructure/), [LLVM-MCA](https://llvm.org/docs/CommandGuide/llvm-mca.html); additional scheduling references are in §9 |
+
+## 3. Facts to derive
+
+These requirements replace the older plan's assumptions about completion-time reads, nonpipelined MXUs, and RAR conflicts. Each fact needs configuration/operand predicates and evidence scope.
+
+| ID | Fact | Extraction target and consumer |
+| --- | --- | --- |
+| F1 | Decode, operand roles, and implicit state | Decode predicates and control signals; instantiated reads/writes, register pairs, weight/accumulator selection, and legality |
+| F2 | Operand capture and read events | Age of every relevant row/element read, including repeated streams and queued-command capture; `Access` and WAR timing |
+| F3 | Write events and visibility | Row/element write ages, forwarding/same-cycle rules, logical reservation release; RAW/WAW timing and completion accounting |
+| F4 | Resource occupancy and throughput | Port windows, alternatives, capacities, in-flight limits, initiation conditions, and VPU compatibility; `Hold` and reservation checks |
+| F5 | Hardware-enforced versus software-required conditions | Trace stall, accept, assert, reject, and retry paths. Distinguish correctness obligations from hardware-induced performance stalls |
+| F6 | Physical storage/port topology | Bank and row mapping, port counts, read sharing, collision semantics, and arbitration, including DMA/LSU interaction |
+| F7 | Engine identity and sharing | Establish separate or shared XLU/VPU/MXU/LSU paths from instances and control. Verify current assignments rather than assuming an old model disagreement |
+| F8 | DMA and other variable-latency work | Queue/channel lifetimes, ordering, command capture, completion events, and environment-dependent progress. Separate cost estimates from justified bounds |
+| F9 | Frontend timing | Exact issue event and `delay` behavior; translate chosen issue gaps to instruction encoding independently of storage visibility |
+| F10 | Control flow | Branch/jump redirect and delay-slot behavior, barriers, and legality. Current Atlas has one architectural delay slot |
+| F11 | Configuration, capacities, and address maps | Memory sizes, bank geometry, instruction parameters, and address domains for the selected elaboration |
+| F12 | Completion boundaries | Hardware events needed to discharge waits, fixed-work completion, `halt`, and compiler publication obligations such as `atlas.release`; distinguish hardware facts from compiler policy |
+
+The expected benefit is a traceable and maintainable model, with tighter schedules where justified. Row-timed overlap and MXU pipelining already exist in the consumer, so they are not new performance wins to claim in advance.
+
+## 4. Extraction architecture
+
+### 4.1 Reproducible hardware boundary
+
+The selected full-system configuration is `chipyard.AtlasShuttleVectorConfig`, from [AtlasConfigs.scala](../../../chipyard/config/AtlasConfigs.scala#L40-L48). The enclosing Chipyard HEAD inspected here is `48c3a7d11f6de3f0cecb33ae6a31c24ec26ff9d8`, and its Atlas checkout HEAD is `2ae0bef209df6db78c3de18e8f651bb43855cce9`. These identify the inspection baseline, not a completed elaboration or an assertion that working trees have no local changes. Record source hashes and the actual relevant submodule revisions when generating artifacts.
+
+| Selected component | Configuration and source |
+| --- | --- |
+| Atlas tile | `WithAtlasTile()` uses `AtlasParams()`, SBUS attachment, and enabled monitors: [WithAtlasTile.scala](../../../chipyard/config/WithAtlasTile.scala#L12-L30). The default engine/storage parameter bundle is in [AtlasParams.scala](../../../src/main/scala/atlas/common/AtlasParams.scala#L3-L10) |
+| Shuttle + Saturn | One Shuttle core with `WithShuttleVectorUnit(256, 128, VectorParams.genParams)`. The arguments set `vLen=256` and `dLen=128`; the omitted `mLen` becomes 128, with `useScalarFPFMA=false`: [Saturn Configs.scala](../../../../saturn/src/main/scala/shuttle/Configs.scala#L13-L44). Widths are in bits: [Parameters.scala](../../../../saturn/src/main/scala/common/Parameters.scala#L387-L402). The one-core mixin is defined in [Shuttle Configs.scala](../../../../shuttle/src/main/scala/common/Configs.scala#L14-L50) |
+| Fabric and cache geometry | The selected config sets SBUS width to 256 bits, Shuttle tile beats to 16 bytes, and cache blocks to 64 bytes: [AtlasConfigs.scala](../../../chipyard/config/AtlasConfigs.scala#L43-L47). See [SBUS width conversion](../../../../chipyard/src/main/scala/config/fragments/SubsystemFragments.scala#L17-L19), [Shuttle beat setting](../../../../shuttle/src/main/scala/common/Configs.scala#L172-L179), and [tile width widget](../../../../shuttle/src/main/scala/common/Tile.scala#L263-L268) |
+| Base system | `EE290BaseConfig` configures one external-memory channel, 64-bit edge data, 64 GiB external address capacity, and 500 MHz bus/harness frequency settings, then inherits `AbstractConfig`: [EE290Configs.scala](../../../../chipyard/src/main/scala/config/EE290Configs.scala#L124-L139). The selected config overrides its 32-byte cache blocks with 64-byte blocks. These are configuration values, not measured memory latency or achieved frequency |
+| Inherited simulation interfaces | `AbstractConfig` includes SimDRAM/SimTSI-over-serial binders ([harness binders](../../../../chipyard/src/main/scala/config/AbstractConfig.scala#L18-L20)) and a TestChipIP serial TileLink client plus one AXI memory channel ([serial and memory configuration](../../../../chipyard/src/main/scala/config/AbstractConfig.scala#L73-L81)). Pin the actual harness, binders, and external-memory model before interpreting DMA timing |
+| Atlas bus boundary | DMA attaches to the selected SBUS ([AtlasTile.scala](../../../src/main/scala/diplomatic/top/AtlasTile.scala#L202-L204)); IMEM/CSR attach to PBUS ([IMEM/CSR attachment](../../../src/main/scala/diplomatic/top/AtlasTile.scala#L206-L218)); VMEM attaches to SBUS ([VMEM attachment](../../../src/main/scala/diplomatic/top/AtlasTile.scala#L220-L225)). Preserve arbitration and width-adaptation behavior in the extracted environment |
+
+Saturn's selected `genParams` is defined in [Parameters.scala](../../../../saturn/src/main/scala/common/Parameters.scala#L20-L53). The separate `mxParams` enables `useMxFPFMA`/`useMxConversion` ([MX parameters](../../../../saturn/src/main/scala/common/Parameters.scala#L55-L60)); their defaults are false ([default feature settings](../../../../saturn/src/main/scala/common/Parameters.scala#L349-L351)). The repository's `bf16_fp8` branch name alone does not establish which arithmetic features this configuration enables.
+
+The selected composition uses `EE290BaseConfig`; it does not include the separate `WithEE290TapeoutPeripherals` mixin that installs a serial off-chip-memory manager and disables the standard memory port ([EE290Configs.scala](../../../../chipyard/src/main/scala/config/EE290Configs.scala#L90-L122)). Distinguish the selected AXI-memory/serial-client environment from that other topology. Any unit harness used for the first extraction slice must state which full-system interfaces it abstracts and how their relevant behavior is preserved.
+
+Pin this configuration, the source origins in §2.4, all external modules, tool revisions, elaboration parameters, clock/reset assumptions, and source/IR hashes. The [S0 guide](../../docs/rtlgraph-s0.md) provides a tested cached-JAR elaboration/lowering recipe and explicit provenance boundaries. A current-source assembly rebuild and simulation setup remain separate work; the cached-JAR replay does not establish them.
+
+Use Chisel/FIRRTL lowering into a supported CIRCT hardware subset. Keep source locations and stable instance/symbol references where possible. Inventory residual dialects, SRAM models, black boxes, and unsupported constructs. An unresolved module affecting a timing claim makes that claim unresolved; preserving a name does not supply its semantics.
+
+Produce simulation inputs through an explicit backend flow from the pinned design. `firtool` emits hardware IR/RTL; constructing an Arcilator executable is a separate lowering/build step. If analysis and simulation use different optimization pipelines, preserve mappings and validate that they represent the same behavior relevant to the claim.
+
+### 4.2 Deterministic analyses
+
+| Component | Responsibility |
+| --- | --- |
+| E1 census | Instance hierarchy, relevant storage, ports, state, capacities, and external-module assumptions; start with the selected instruction slice |
+| E2 decode | Recover instruction predicates and operand/control mappings through masks, slices, comparisons, and Boolean structure; do not assume one full-word equality per instruction |
+| E3 netgraph | Traverse typed MLIR values, definitions, uses, and instance connections; retain bit/field selection and source provenance |
+| E4 event/path query | Connect issue/acceptance to reads, writes, acquisition/release, and completion, with enables, mux guards, clocks, and resets |
+| E5 temporal analysis | Analyze counters, FIFO state, sequencer transitions, and launch predicates; use bounded properties or other supported proof methods for explicit claims |
+
+Sequential depth is structural evidence, not an instruction latency by itself. Enables, stalls, feedback, SRAM behavior, and prior state determine when a path is exercised. The [HW](https://circt.llvm.org/docs/Dialects/HW/), [Comb](https://circt.llvm.org/docs/Dialects/Comb/), and [Seq](https://circt.llvm.org/docs/Dialects/Seq/) dialects provide the starting representation.
+
+Try [Core-to-FSM](https://circt.llvm.org/docs/Passes/#-convert-core-to-fsm) on a small selected controller before designing a custom recovery engine. Its documented state-register selection is explicit or name-based; Atlas row counters, FIFOs, and concurrent port engines may require additional analysis. Check the implementation and limits in the pinned CIRCT revision rather than assuming automatic recovery of an instruction contract.
+
+### 4.3 Agent role and independent validation
+
+The deterministic core is proposed as C++ CIRCT analysis passes plus a query CLI; Python bindings can support prototypes. Agents navigate source/IR, propose mappings and hypotheses, construct experiments, and reconcile discrepancies. Reproducible tool results carry the evidence. Share the current opcode representation through an adapter where useful; the compiler has a C++ opcode table, not the old proposed `isa.def` X-macro.
+
+Instrument events during the first timing slice: scalar issue, engine acceptance, operand row read, destination row write, resource acquire/release, completion, stall, and assertion. Attach instruction/transaction identity and instance/row information so multiple in-flight commands can be distinguished. [Arc](https://circt.llvm.org/docs/Dialects/Arc/) is a simulation-oriented state-transfer representation; its simulation scheduling is distinct from kernel instruction scheduling.
+
+Monitors must check independently justified hardware obligations: port capacity, intended value/version visibility, accepted-command accounting, or a documented launch invariant. A monitor that merely asserts the proposed lookup-table distance cannot independently validate that distance. Avoid blanket prohibitions on reading any in-flight destination: a legal streamed overlap may consume rows already available.
+
+Use [bounded model checking](https://circt.llvm.org/docs/Tools/circt-bmc/) for questions such as whether a source can be read after age k, whether an accepted command must write a row by age k, or whether legal launches can collide. State reset, initial-state, environment, and interference assumptions, the timestep bound, and whether the result establishes safety or progress. A timeout or unsupported operation is not a proof.
+
+## 5. Canonical model, projection, and evidence
+
+### 5.1 Schema requirements
+
+The proposed `atlas.rtl.yaml` must carry:
+
+- Input identity, target configuration, age-zero event, clock domain, interval conventions, address units, and external/environment assumptions.
+- Operand-sensitive access templates and their applicability predicates, including implicit state, repeated streams, unknown aliases, and completion-event accesses.
+- Resource identities and capacities, physical mapping/sharing, occupancy intervals and alternatives, logical reservations, and release visibility.
+- Launch/sequencer rules, visibility/bypass policies, hardware enforcement classification, frontend behavior, and completion obligations.
+- Provenance and evidence for every hardware claim; explicit unresolved/conflicting facts and consumer capabilities needed to interpret them.
+
+The following YAML is an intentionally incomplete format sketch, with an unresolved fact. It is not a loadable machine model or a measured Atlas timing result; other accesses, holds, and launch rules must accompany the completed profile.
 
 ```yaml
-# atlas.rtl.yaml (sketch)
 schema_version: 1
-family: circt_timing            # complements Merlin's circt_static
+family: circt_timing               # proposed format, not a registered Merlin schema
+deployable: false
 inputs:
-  fir_sha256: …
-  toolchain: {firtool: 1.x, circt-opt: …, arcilator: …}
-units:
-  MXU1: {occupancy: 35, pipelined: false, interlocked_by_hw: false,
-         status: VERIFIED, provenance: [atlas/mxu/ipt/InnerProductTreesTop.scala:…],
-         witness: witnesses/mxu1_occupancy.json}
-ops:
+  rtl_revision: null
+  configuration: chipyard.AtlasShuttleVectorConfig
+  hardware_ir_sha256: null
+  toolchain: {}
+timing:
+  age_zero: frontend_issue         # map separately to each engine's acceptance
+  hold_end: inclusive
+facts:
+  mxu1_acc_write_stream:
+    resolution: UNKNOWN
+    value: null                   # must resolve first_age, step, and count
+    applicability: null
+    provenance: []
+    evidence: []
+profile_templates:
   VMATMUL_MXU1:
-    unit: MXU1
-    reads:  [{res: MReg, operand: vs1, span: 1, window: [1, 3]},   # cycles after issue
-             {res: WSlot, operand: vs2, window: [1, 35]}]
-    writes: [{res: Acc, operand: vd, commit: 35}]
-distances:          # projected IIG; atlas-opt reads these directly
-  - {a: VMATMUL_MXU1, b: VMATPOP_BF16_ACC_MXU1, res: Acc, kind: RAW, d: 35,
-     status: VERIFIED, tight: true}
-discrepancies:
-  - {id: D1, fact: XLU_separate_unit, rtl: true, npu_model: false, spec: true}
+    writes:
+      - resource: Acc
+        selector: instruction_accumulator
+        stream_fact: mxu1_acc_write_stream
+consumer_requirements:
+  - row_accesses
+  - logical_reservations
+  - resource_capacities
+  - conditional_launch_rules
+  - completion_events
 ```
 
-**Projection rule (RTG → IIG).** For ops `A` then `B` sharing resource `R`:
-- RAW: `d = commit_A(R) − read_start_B(R) + 1`
-- WAR: `d = read_end_A(R) − commit_B(R) + 1`
-- WAW: `d = commit_A(R) − commit_B(R) + 1`
-- Bank or port: derived from port counts and access windows
-- Unit: `d = II(unit)`
+The schema audit must cover the distributed implementation in §2.1. A `Footprint` round trip alone is insufficient. Unsupported semantics must produce an explicit rejection or a documented, justified conservative translation. The canonical format remains richer than any pairwise-distance export.
 
-All results are clamped at ≥ 1. The exact `+1` and `delay` encoding offsets come from F9.
-Every projected distance is itself witnessed (§6, S6). The formula is a hypothesis
-generator, not a proof.
+### 5.2 Dependency distances versus resource exclusion
 
----
+For fixed-age accesses by instructions A then B, derive precedence over overlapping storage elements and the relevant access occurrences:
+
+```text
+RAW: d >= max_e(writeAge_A(e) - readAge_B(e)  + delta_RAW(e))
+WAR: d >= max_e(readAge_A(e)  - writeAge_B(e) + delta_WAR(e))
+WAW: d >= max_e(writeAge_A(e) - writeAge_B(e) + delta_WAW(e))
+```
+
+Use the required same-cycle ordering/visibility policy for each delta. Repeated reads or writes require considering the relevant occurrences, not just the first access. Combine these data terms with logical-reservation and launch-rule terms and the single-issue minimum gap of one. Unknown completion ages require event-based ordering instead of substitution into a fixed-age formula.
+
+For illustration only, if A writes row r at age `4+r`, B reads it at age `r`, and visibility requires a strictly later cycle, the row-data constraint is `d >= 5`. Other reservations or launch rules may require a larger gap. This is not an Atlas measurement.
+
+Keep exclusion constraints in resource reservations. If A uses a port at age 5 and B at age 2, they collide at issue distance 3; other nearby distances can be legal. Three instructions can also exceed a two-slot resource while every pair is legal. Neither case is fully captured by one pairwise minimum distance or a universal `d = II` rule.
+
+Storage visibility and `delay` encoding are separate facts. The current compiler models A at t, `delay N` at t+1, and B at t+N+2; a gap g greater than one is emitted as `delay (g-2)`. See [simulator.cpp](../../src/core/simulator.cpp#L209-L218) for the modeled timing. Verify that frontend convention against the selected RTL independently of RAW/WAR/WAW visibility.
+
+### 5.3 Evidence and unresolved facts
+
+Keep fact resolution separate from evidence strength. Proposed resolution states are `CANDIDATE`, `RESOLVED`, `UNKNOWN`, and `CONFLICT`; `RESOLVED` means the claim has an explicit interpretation and scope, not universal safety. Consumer admission is a separate policy requiring suitable evidence for the intended use.
+
+| Evidence category | What it establishes |
+| --- | --- |
+| Structural derivation | A reproducible query/derivation over identified RTL/IR under stated semantic assumptions |
+| Simulation validation | The obligation held for listed inputs, states, traffic, configuration, and observed executions |
+| Bounded proof | The property holds for the modeled executions within the recorded bound and assumptions |
+| Unbounded proof | The stated property holds under recorded assumptions using an identified proof method; only claim this when actually established |
+
+Each record needs the fact/property, applicability predicates, source instances/state/control paths, hashes and tool versions, assumptions, state/input/interference scope, result, and replayable query/test/proof artifacts. Preserve counterexamples and conflicts. Record model/spec values as comparison evidence, not as RTL derivation.
+
+A passing witness at d establishes that execution. A failure at d-1 establishes a counterexample there. Together they do not prove safety for every state/operand or universal minimality, especially when legal resource gaps are nonmonotone. Record adjacent-gap experiments as such; use a stronger claim only when its full scope is established.
+
+For `UNKNOWN` or `CONFLICT`, reject affected scheduling choices or retain an independently justified conservative policy. An arbitrary large delay cannot establish completion for an unbounded transaction. DMA latency estimates may guide performance decisions, but correctness must use completion events or a validated bound under enforceable environment assumptions. Preserve uncertainty across waits, including physical-resource reservations of fixed-latency work still in flight.
 
 ## 6. Stages and deliverables
 
+Start with a small end-to-end slice rather than requiring a complete netlist census before compiler integration. Choose an instruction family with a fixed-timing path; an MXU1 `vmatmul` → `vmatpop` sequence is a candidate because it exercises streamed rows and accumulator launch rules. Include setup state, ports, and logical reservations in its scope.
+
 | Stage | Work | Exit criterion |
-|---|---|---|
-| **S0 Elaborate** | Reproducible build of the Atlas generator to FIRRTL, then `atlas_hw.mlir`, Verilog, and the arcilator model, with names and source locators kept. Pin toolchain digests | `atlas_hw.mlir` checked into artifacts by hash. Arcilator runs `MatmulProgram` and matches `npu_model`'s golden output |
-| **S1 Census (E1)** | Instance tree, registers, memories and banks, ready/valid bundles, all back-annotated to Scala lines | `census.json`. Every SRAM classified (MRF / VMEM / weight / acc / IMEM) or explicitly `UNKNOWN`. Closes F11 |
-| **S2 Decode (E2)** | Recover the opcode → control-vector table from the netlist and diff it against `out.scala` and `isa_definition.py` (reusing Merlin's `check_isa_matches_rtl` idea) | F1 for all mnemonics. Coverage is reported first, and uncovered mnemonics are listed |
-| **S3 RTG (E3, E4)** | Signal-level graph; sequential depth on RF-port → unit → RF-port paths; `rtg.dot` coloured by unit | The agent can answer "what drives `mdst` write-enable for MXU1" with a query trace |
-| **S4 Timing facts (E5 + agent)** | F2–F10: FSM/counter recovery, BMC bounds, and fitting data-dependent formulas (DMA) on training sizes, then checking held-out sizes | Every F-row is `VERIFIED` or has a written reason for `UNKNOWN` |
-| **S5 Project** | RTG → IIG; emit `atlas.rtl.yaml`; add `--machine=rtl` to `atlas-opt`'s loader | `atlas-opt` consumes it with no code changes beyond the loader |
-| **S6 Witness sweep** | For every distance `d`: micro-kernel at `d` passes, and at `d-1` a monitor fires or the value is wrong. Then run all ~90 `npu_model` kernels, original and `atlas-opt -O3 --machine=rtl`, on arcilator | 100% distance coverage. Golden outputs match on RTL. Cycle report of RTL vs `npu_model` vs `atlas-opt` prediction |
-| **S7 Stretch: dynamic graph** | Instrument the RTL sim to log per-instruction issue, read, and commit events. Build the observed dependency graph per kernel and diff it against `atlas-opt`'s static graph | Missing edges (unsafe) = 0. Extra edges (conservative) are counted and reported |
+| --- | --- | --- |
+| S0 Consumer/build boundary | Audit the distributed consumer contract; pin `chipyard.AtlasShuttleVectorConfig`, the relevant repository revisions from §2.4, tools, reset/environment assumptions, and reproducible IR/simulation flow | Field/rule coverage checklist; hashed hardware artifact; explicit unsupported/external modules; one functional smoke case, without claiming timing proof |
+| S1 Structural slice | E1/E2 over one instruction family and its relevant resource paths; identify scalar issue, engine acceptance, and storage identities | Reproducible decoder/path queries with source provenance and explicit coverage |
+| S2 Temporal slice | E3–E5 plus early event instrumentation; derive reads, writes, visibility, release, and launch predicates | One profile with independent simulation checks and an appropriately scoped bounded property where supported; unresolved claims remain explicit |
+| S3 Consumer integration | Specify schema/model interface and adapter; replace the chosen baseline profile and related rules in graph construction, scheduling, and checking | A kernel schedule consumes the profile without losing resource or completion semantics; RTL functional checks pass for that slice |
+| S4 Generalization | Expand F1–F12, bank/port conflicts, operand aliases, multiple in-flight instructions, and completion-driven DMA | Coverage by instruction/configuration/rule family; every gap or conflict identified; no silently omitted correctness obligation |
+| S5 Corpus validation | Run original and scheduled kernels from the pinned corpus, with varied operands, bank relationships, issue gaps, and interference | Report actual corpus/coverage counts, functional outcomes, assertion/monitor results, and prediction errors; distinguish baseline failures |
+| S6 Portability probes | Small SystemVerilog import, then selected Radiance/Muon and Vortex slices (§8) | Supported IR subset, assumptions, target-specific enforcement, event traces, and unsupported constructs recorded |
+| S7 Optional dynamic graph | Reconstruct observed kernel dependencies from tagged event traces and compare with compiler constraints | Explain observed missing/extra constraints for the tested executions; avoid claiming universal coverage from one trace |
 
-Deliverables: `RTL_GRAPH_PLAN.md` (this file), `atlas.rtl.yaml`, `rtg.dot`,
-`discrepancies.md` (resolving PLAN.md D1–D8 and open questions 1–2), the witness corpus,
-and an agent run log per fact.
+The first demonstrator ends at S3: a hardware-derived profile reaches the scheduler and passes independent RTL checks. Demonstrate sensitivity using a synthetic timing fixture or an isolated experimental fixture whose timing can be changed: extraction and the consumer's schedule should respond to the relevant change. The finished Atlas RTL remains reference material.
 
----
+Deliverables are the versioned model/schema, extractor queries, evidence manifest, adapter, scoped RTG/IIG visualizations, discrepancy report, and replayable witness/property corpus. Keep generated IR, binaries, traces, and run artifacts outside this context directory; retain references and reusable conclusions here.
 
-## 7. Evaluation (is the agentic part worth it?)
+## 7. Evaluation and risks
 
-Borrowing Merlin's experimental discipline (`agentic_experiment_integrity.md`, X1–X8):
+Compare against the pinned current compiler/`rtl-match` baseline, not the older completion-only model. Measure extraction coverage, unsupported cases, provenance completeness, replayability, simulation failures, proven property scope, compile/extraction cost, schedule cycles, and prediction errors. State the corpus and environment for every numerical result. A faster schedule is useful only with the required functional and timing checks.
 
-1. **Blind derivation.** During extraction the agent must not see `npu_model` latency
-   tables, the spec's timing tables, or Merlin's `schedule_contract.yaml`. These are
-   masked by the sandbox. The reconciler sees them only afterwards. Otherwise
-   "derived = model" is circular.
-2. **Arms:** (a) deterministic extractor only, (b) agent + tools, (c) agent + tools +
-   the spec, (d) a human-transcribed table (today's PLAN.md). Metrics: fraction of F-rows
-   `VERIFIED`, number of distances that are **tight**, number of unsafe distances (must
-   be 0), agent cost/time, and number of real RTL-vs-model discrepancies found.
-3. **Payoff metric:** `atlas-opt` cycles on RTL sim with `--machine=rtl` vs
-   `--machine=model`, with correctness required. If F2 (read-at-issue) turns out true
-   anywhere, this should show up as a measurable win.
-4. **Injected-fault control** (like Merlin's X5): perturb one RTL latency, for example
-   add a pipeline register to the MXU1 commit path, and check that the pipeline
-   re-derives the new value and `atlas-opt` output changes accordingly. Also check the
-   inverse: the model-derived description now produces a kernel that fails on RTL.
-5. **Portability probe:** re-run on a second configuration (for example, a different VPU
-   lane count) with no human edits.
+For an agentic evaluation, compare deterministic tools alone, agent plus tools, agent plus tools and specifications, and the current manually maintained model. Blind extraction runs must exclude model/spec timing values and this document's baseline observations; the reconciler sees them afterward. An agent that has already read those values cannot serve as a blind experimental arm merely by omitting citations.
 
----
+Use dependency-limited experiments separately from contention experiments. Vary aliases, physical-bank relationships, instruction spacing, reset/prior state, and concurrent traffic. Cross-check selected witnesses between simulation backends where supported. Mutation fixtures should exercise both extraction sensitivity and consumer behavior; stale timing should be detected when the mutation invalidates its assumptions.
 
-## 8. Risks
+| Risk | Response |
+| --- | --- |
+| Name loss or optimization changes provenance | Preserve source/symbol mappings, query semantics rather than names alone, and track extraction/simulation artifact identity |
+| Correct-looking simulation under a wrong model | Independent obligations, distinguishing data patterns, varied interference, and scoped formal checks; the compiler's own checker is not an RTL oracle |
+| Unsupported memories, external modules, or lowering | Record contracts and unresolved behavior; restrict the claim instead of assigning guessed timing |
+| State-space growth in sequencers/FIFOs | Begin with a slice and explicit assumptions; report bounded results and inconclusive analyses honestly |
+| DMA/link latency and arbitration variability | Model completion and backpressure; distinguish measured costs from correctness bounds |
+| Rich semantics lost in a consumer adapter | Capability/schema checks and explicit precision-loss reports; retain reservation-table checks |
+| Timing optimization changes numerical behavior | Preserve engine assignment/operation semantics initially; require a separate numerical contract for transformations such as MXU rebinding |
+| Source or tool drift | Pin revisions/configurations; regenerate facts and compare evidence/model diffs before admitting an updated model |
 
-| Risk | Mitigation |
-|---|---|
-| firtool optimizations (dedup, inlining, CSE, name dropping) erase the anchors the agent navigates by | Keep names, aggregates, and locators. Run at a low optimization level for extraction, and use a separate optimized build only for simulation speed |
-| The full RTL tree is external (Merlin ships only a curated subset: MXU, scalar ISA, params); DMA, LSU, VPU lanes, and the MRF are missing from it | Blocking prerequisite: access to the full `atlas-npu` tree (§9, Q1) |
-| DMA and off-chip timing go through Chipyard/TileLink and a serial link, so they aren't deterministic from core RTL alone | Derive the core-side DMA FSM exactly and model the link as a declared parameter with measured bounds. Keep DMA distances `DERIVED` and never `VERIFIED` against real silicon |
-| The hardware interlocks some hazards, so some "distances" are only performance hints | F5 marks each edge `correctness` or `performance`. `atlas-opt` can then relax performance edges while keeping them in its cost model |
-| Silent corruption at `d-1` looks correct when data happens to match | Hazard monitors (§4.2) plus randomized operand data in witnesses |
-| The agent fabricates or anchors on spec numbers | Blind protocol, `VERIFIED` requires a witness, and the ledger rejects facts without provenance |
-| Arcilator and verilator disagree, or arcilator lacks support for some constructs | Cross-run a sample of witnesses on both. Fall back to verilator |
-| Model drift over time | CI job: re-extract on each RTL bump and diff `atlas.rtl.yaml`, analogous to `check_isa_sync.py` |
+## 8. Portability: Radiance/Muon and Vortex
 
----
+The reusable component is the analysis and evidence framework. Each target supplies its own instruction identities, architectural storage, acceptance/completion events, resource topology, and enforcement semantics. A relation that requires explicit software spacing on Atlas may describe a hardware-induced stall on another machine.
 
-## 9. Open questions
+### 8.1 Radiance/Muon
 
-1. **RTL access:** can I get the full buildable Atlas tree (`atlas-npu/src/main/scala/atlas`
-   and the `chipyard_atlas` checkout, `AtlasRocketConfig`), or only Merlin's curated
-   subset? S3 and later need the full tree.
-2. **Source of truth:** once RTL facts exist, should `atlas-opt` default to
-   `--machine=rtl`, with `npu_model` becoming the thing that gets corrected?
-3. **Merlin integration:** should this output be contributed upstream as a
-   `circt_timing` fact family that feeds Merlin's Atlas `schedule_contract.yaml`, or stay
-   standalone in this repo?
-4. **Agent runtime:** Claude Agent SDK harness vs. Claude Code + `AGENT.md` +
-   restricted tools? What compute and time budget per extraction run?
-5. **Scope of "graph":** is the RTG → IIG machine description the goal, or do you also
-   want S7 (the dynamic per-kernel graph from RTL traces) in v1?
+Current [Radiance documentation](https://github.com/ucb-bar/radiance/blob/main/README.md) identifies Muon as its SIMT core. Treat it as a distinct target profile from Vortex. The [Muon design](https://github.com/ucb-bar/radiance/blob/main/docs/muon.md) discusses register-demand-dependent warp occupancy; its [issue](https://github.com/ucb-bar/radiance/blob/main/docs/issue.md) and [register mapping](https://github.com/ucb-bar/radiance/blob/main/docs/rename.md) documents motivate extracting warp context, register allocation/mapping, operand collection, forwarding, and hardware hazard handling.
+
+Those documents include tentative choices and TODOs. Their latency or occupancy examples are not verified facts about a selected implementation. Pin the Radiance commit/configuration, elaborate a small issue/register-access slice, and reconcile the design notes with its actual control paths. Record which conditions block a warp, an instruction, or a shared pipeline, and how register usage constrains resident work.
+
+### 8.2 Vortex
+
+Vortex's [microarchitecture overview](https://github.com/vortexgpgpu/vortex/blob/master/docs/designs/microarchitecture.md) describes per-warp instruction buffering, a register scoreboard, operand collection, execution, and scoreboard updates at commit. Its [scoreboard RTL](https://github.com/vortexgpgpu/vortex/blob/master/hw/rtl/core/VX_scoreboard.sv) is a starting point for checking readiness, resource congestion, and release on writeback in a pinned configuration.
+
+Begin with a scoreboard/operand-collection slice and its real parameters, macros, interfaces, and dependencies. Preserve warp identity, relevant active-lane information, register readiness, queue/port capacity, and acceptance/writeback events. Extract which hazards hardware enforces and which obligations remain with software; do not transfer Atlas `delay` insertion or fixed issue-to-completion assumptions.
+
+### 8.3 Common IR boundary and feasibility gates
+
+```text
+Atlas or Radiance Chisel -> FIRRTL -> firtool -----+
+                                                  +-> supported HW/Comb/Seq subset
+Vortex SystemVerilog -> circt-verilog lowering ----+
+```
+
+The [CIRCT SystemVerilog frontend](https://circt.llvm.org/docs/Tools/circt-verilog/) documents lowering to core hardware dialects, requires a Slang-enabled build, and has evolving language support. First import a small SystemVerilog module, inventory residual dialects/external modules, and compare event behavior with an independent simulator. Then attempt the selected Vortex slice. This plan does not establish a complete Vortex or Radiance import.
+
+Portability success means the same query/evidence framework can recover a scoped target-specific profile and explain its enforcement semantics. It does not require replacing the existing Atlas scheduler or promising one universal latency table.
+
+## 9. Focused reading and prototype sequence
+
+Work backward from the consumer. External documentation links may track moving branches; pin tool/source revisions when using them in an experiment.
+
+| Order | Reading | Concrete question or output |
+| --- | --- | --- |
+| 1 | [PLAN.md scheduling](PLAN.md#L397-L412), [machine.h](../../src/core/machine.h#L17-L97), [reservations.h](../../src/core/reservations.h#L9-L43), and the implementation ranges in §2.1 | What must an extracted replacement preserve, including rules outside `Footprint`? Produce the S0 checklist |
+| 2 | [GCC processor pipeline descriptions](https://gcc.gnu.org/onlinedocs/gccint/Processor-pipeline-description.html), [LLVM scheduling definitions](https://github.com/llvm/llvm-project/blob/main/llvm/include/llvm/Target/TargetSchedule.td), [LLVM-MCA](https://llvm.org/docs/CommandGuide/llvm-mca.html) | Separate dependency latency, operand timing/bypasses, and resource reservations. GCC's compiler RTL is a different representation from hardware RTL |
+| 3 | [CIRCT Getting Started](https://circt.llvm.org/docs/GettingStarted/), [MLIR IR traversal](https://mlir.llvm.org/docs/Tutorials/UnderstandingTheIRStructure/) | Build a small pass and follow definitions/uses and hierarchy through APIs rather than parsing printed IR |
+| 4 | [HW](https://circt.llvm.org/docs/Dialects/HW/), [Comb](https://circt.llvm.org/docs/Dialects/Comb/), [Seq](https://circt.llvm.org/docs/Dialects/Seq/), [instance/module graph passes](https://circt.llvm.org/docs/Passes/#-hw-print-module-graph) | Map modules, control predicates, state updates, and provenance for one instruction path |
+| 5 | [Chisel ready/valid interfaces](https://www.chisel-lang.org/docs/explanations/interfaces-and-connections), [Core-to-FSM](https://circt.llvm.org/docs/Passes/#-convert-core-to-fsm) | Distinguish command presence, acceptance, and architectural issue; identify counters/FIFOs beyond named FSM state |
+| 6 | [Arc](https://circt.llvm.org/docs/Dialects/Arc/), [CIRCT BMC](https://circt.llvm.org/docs/Tools/circt-bmc/) | Generate tagged event traces and an independently specified, explicitly scoped property |
+| 7 | [LLVM-Exegesis](https://llvm.org/docs/CommandGuide/llvm-exegesis.html) | Borrow controlled-snippet methodology for dependency and contention experiments; it is not an Atlas RTL extractor |
+| 8 | Merlin references (§2.3), [CIRCT scheduling infrastructure](https://circt.llvm.org/docs/Scheduling/), and target/frontend references (§8) | Audit adapter precision and explore a second target. CIRCT scheduling/SSP concerns the consuming side and does not replace extraction |
+
+## 10. Decisions to resolve during implementation
+
+1. For the selected `chipyard.AtlasShuttleVectorConfig`, which pinned toolchain, verified elaboration command, memory/environment contracts, and optional unit-harness abstractions define the first extraction run?
+2. Which fixed-timing instruction family provides the smallest useful S1–S3 slice, and which independent functional and timing obligations cover it?
+3. What versioned model interface can express the distributed compiler rules without silently retaining stale hardcoded assumptions?
+4. What evidence and scope are required before an extracted fact may affect correctness scheduling, and how are unsupported cases rejected or conservatively handled?
+5. Which Merlin revision should the optional reference checkout pin? If an export adapter is pursued, which contract is its target, and which constraints cannot be exported without losing precision?
+6. Which agent runtime and restricted query tools support reproducible evaluation, and what extraction/proof budgets apply?
+7. Which Radiance/Muon and Vortex configurations provide manageable initial portability slices? Full target import and dynamic whole-kernel graphs remain subsequent work.
