@@ -28,7 +28,7 @@ const char* edgeKindName(EdgeKind k) {
 
 bool isBarrier(const Instr& in) {
     OpClass c = in.op->opClass;
-    return c == OpClass::Delay || c == OpClass::Csr || c == OpClass::Fence;
+    return c == OpClass::Csr || c == OpClass::Fence;
 }
 
 bool vpuUsesBothSlots(const OpInfo& op) {
@@ -443,7 +443,7 @@ Dependence dependence(const Instr& a, const Footprint& fa, const Instr& b, const
     const OpInfo& A = *a.op;
     const OpInfo& B = *b.op;
 
-    if (isBarrier(a)) consider(A.opClass == OpClass::Delay ? 1 + (int)(a.imm & 0xFFF) : 1, EdgeKind::Order, A.name + " is a barrier");
+    if (isBarrier(a)) consider(1, EdgeKind::Order, A.name + " is a barrier");
     if (isBarrier(b)) consider(1, EdgeKind::Order, B.name + " is a barrier");
     // CSR runs before engines; same-tick completion is too late. DMA needs a wait.
     if (b.release)

@@ -21,7 +21,7 @@ def publication_dir(request, tmp_path):
     root = request.config.getoption('artifacts_dir')
     path = tmp_path if root is None else Path(root) / re.sub(r'[^A-Za-z0-9_.-]', '_', request.node.name)
     path.mkdir(parents=True, exist_ok=True)
-    (path / 'after.S').unlink(missing_ok=True)
+    (path / 'executable.S').unlink(missing_ok=True)
     return path
 
 
@@ -100,7 +100,7 @@ def assert_safe_publication(before, after):
 
 
 def compare(source, compiler, hardware_config_cls, directory, *, dma_scale=1):
-    optimized = compiler(source, directory)
+    optimized = compiler(harness.strip_delays(source), directory)
     before = observe(source, hardware_config_cls, directory / 'reference', dma_scale=dma_scale)
     after = observe(optimized, hardware_config_cls, directory / 'optimized', dma_scale=dma_scale)
     assert_safe_publication(before, after)
@@ -148,14 +148,7 @@ def test_release_rejects_missing_or_wrong_dma_wait(
     source = 'addi x7, x0, 64\ndma.load.ch0 x0, x0, x7\n' + wait + label + PUBLISH
     with pytest.raises(harness.OptimizerError, match=r'(?i)(release|dma|wait)'):
         publication_compiler(source, publication_dir)
-    assert not (publication_dir / 'after.S').exists()
-
-
-def test_release_in_architectural_delay_slot_is_rejected(publication_compiler, publication_dir):
-    source = 'jal x0, target\n' + PUBLISH + 'target:\naddi x2, x0, 7\n'
-    with pytest.raises(harness.OptimizerError, match=r'(?i)(release|slot)'):
-        publication_compiler(source, publication_dir)
-    assert not (publication_dir / 'after.S').exists()
+    assert not (publication_dir / 'executable.S').exists()
 
 
 def test_release_marker_survives_reoptimization(
@@ -166,7 +159,7 @@ def test_release_marker_survives_reoptimization(
     assert first.count('atlas.release') == 1
     repeat = publication_dir / 'repeat'
     repeat.mkdir(exist_ok=True)
-    second = publication_compiler(first, repeat)
+    second = publication_compiler(harness.strip_delays(first), repeat)
     assert second == first
     observed = observe(second, hardware_config_cls, repeat / 'model')
     assert observed['active_engines'] == ()

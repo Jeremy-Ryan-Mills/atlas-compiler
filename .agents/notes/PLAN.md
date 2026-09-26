@@ -23,11 +23,19 @@ Sources surveyed on `rtl-match`: `npu_spec/00–06`, `docs/rtl-timing.md`,
 
 ## Status (2026-09-23)
 
+**Input/output contract (from the PI, 2026-09-26):** atlas-opt turns functional
+assembly (FS: correct instruction by instruction, no `delay`s, no branch delay
+slots) into executable assembly (ES). The model compiler targets FS; the
+performance model consumes ES. Input with `delay`s is rejected;
+`scripts/strip_delays.py` converts hand-scheduled kernels. `dma.wait` stays in FS for
+now (OPEN_QUESTIONS.md #5). So P0 `strip-artifacts` below is gone; `remove-nops` drops
+no-op instructions instead.
+
 Built, using only the conservative choices from [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md):
 parser/printer, row-timed access profiles for every rtl-match instruction,
 dependency graph, reservation table, list scheduler with the robust `dma.wait`
-rule, passes P0 (`strip-artifacts`), P3 (`fill-delay-slots`) and P2 (`schedule`),
-a timing simulator/checker, and the before/after HTML viewer.
+rule, passes `remove-nops`, P3 (`fill-delay-slots`) and P2 (`schedule`), a timing
+simulator/checker, and the HTML dependency graph viewer.
 
 Validation (the pytest equivalence harness in `tests/`, on the rtl-match submodule):
 79 of 80 kernels leave identical DRAM output, DRAM inputs and VMEM after

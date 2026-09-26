@@ -43,7 +43,7 @@ static std::vector<bool> redundantEdges(const DepGraph& g) {
 }
 
 static bool isScheduleArtifact(const Instr& in) {
-    return (in.op->opClass == OpClass::Delay && !in.keep) || isNop(in);
+    return in.op->opClass == OpClass::Delay || isNop(in);
 }
 
 static GraphView makeView(const std::vector<Instr>& seq, const std::vector<int>& seqCycles,
@@ -61,16 +61,16 @@ static GraphView makeView(const std::vector<Instr>& seq, const std::vector<int>&
     return v;
 }
 
-ProgramView buildProgramView(const std::string& source, const AsmProgram& original, const Code& optimized,
-                             const SimResult& before, const SimResult& after) {
+ProgramView buildProgramView(const std::string& source, const AsmProgram& functional, const Code& optimized,
+                             const SimResult& result) {
     ProgramView view;
     view.source = source;
-    view.before = before;
-    view.after = after;
-    Code orig = buildBlocks(original);
+    view.result = result;
+    view.inputInstructions = (int)functional.instrs.size();
+    Code orig = buildBlocks(functional);
     std::vector<RegValues> entryOrig = blockEntryValues(orig);
     std::vector<RegValues> entryOpt = blockEntryValues(optimized);
-    uint32_t dmaRegs = dmaOperandRegisters(original.instrs);
+    uint32_t dmaRegs = dmaOperandRegisters(functional.instrs);
 
     for (size_t bi = 0; bi < orig.blocks.size() && bi < optimized.blocks.size(); bi++) {
         const Block& ob = orig.blocks[bi];
@@ -78,11 +78,12 @@ ProgramView buildProgramView(const std::string& source, const AsmProgram& origin
         bv.name = ob.labels.empty() ? "block " + std::to_string(bi) : ob.labels[0];
         if (bi == 0 && ob.labels.empty()) bv.name = "entry";
 
-        std::vector<Instr> seq = blockInstructions(ob);
-        std::vector<int> cycles = asWrittenCycles(seq);
-        int length = seq.empty() ? 0 : cycles.back() + naturalGap(seq.back());
-        bv.before = makeView(seq, cycles, entryOrig[bi], length, dmaRegs);
-        bv.lowerBound = criticalPathLength(bv.before.graph);
+        // The input has no timing: place its instructions one step apart, in program order.
+        std::vector<Instr> seq;
+        for (const Instr& in : blockInstructions(ob))
+            if (!isNop(in)) seq.push_back(in);
+        bv.input = makeView(seq, asWrittenCycles(seq), entryOrig[bi], (int)seq.size(), dmaRegs);
+        bv.lowerBound = criticalPathLength(bv.input.graph);
 
         const Block& nb = optimized.blocks[bi];
         std::vector<Instr> seq2 = blockInstructions(nb);
@@ -92,8 +93,8 @@ ProgramView buildProgramView(const std::string& source, const AsmProgram& origin
             if (nb.terminator) cycles2.push_back(nb.terminatorCycle);
             if (hasDelaySlot(nb)) cycles2.push_back(nb.terminatorCycle + 1);
         }
-        length = nb.scheduled ? nb.endCycle : seq2.empty() ? 0 : cycles2.back() + naturalGap(seq2.back());
-        bv.after = makeView(seq2, cycles2, entryOpt[bi], length, dmaRegs);
+        int length = nb.scheduled ? nb.endCycle : seq2.empty() ? 0 : cycles2.back() + naturalGap(seq2.back());
+        bv.output = makeView(seq2, cycles2, entryOpt[bi], length, dmaRegs);
         view.blocks.push_back(bv);
     }
     return view;
@@ -152,7 +153,7 @@ static const char* kPage = R"HTML(<!doctype html>
 <style>
 :root {
   --ground: #F5F7FA; --panel: #FFFFFF; --ink: #18212E; --muted: #5A6577; --grid: #EDF0F4; --rule: #D6DCE4;
-  --accent: #0B7A84; --good: #2F7D4F; --warn: #B4412F;
+  --accent: #0B7A84; --warn: #B4412F;
   --e0: #6E7B8F; --e1: #2E8A5A; --e2: #B8562B; --e3: #C98A1E; --e4: #3B6DB5; --e5: #8756B0; --e6: #0B7A84;
   --k0: #2F66B3; --k1: #C46A1F; --k2: #8B4FB9; --k3: #C23B4B; --k4: #9AA3B0;
   --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
@@ -161,7 +162,7 @@ static const char* kPage = R"HTML(<!doctype html>
   :root {
     color-scheme: dark;
     --ground: #10151D; --panel: #171E28; --ink: #E4E9F0; --muted: #9AA5B5; --grid: #1D2530; --rule: #2A3441;
-    --accent: #3CC3CC; --good: #6CCB91; --warn: #F08A74;
+    --accent: #3CC3CC; --warn: #F08A74;
     --e0: #9AA7BA; --e1: #57C08A; --e2: #EE8656; --e3: #F0B74C; --e4: #6FA0EC; --e5: #B990E3; --e6: #3CC3CC;
     --k0: #6FA0EC; --k1: #F0A25C; --k2: #B98BEA; --k3: #F07684; --k4: #6D7888;
   }
@@ -173,7 +174,6 @@ h1 code { font: 18px var(--mono); color: var(--accent); }
 .stats { display: flex; flex-wrap: wrap; gap: 28px; }
 .stat small { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 .stat b { font: 500 22px var(--mono); }
-.good { color: var(--good); }
 .warn { border-left: 3px solid var(--warn); padding: 8px 12px; background: var(--panel); font: 12px var(--mono); white-space: pre-wrap; }
 .controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; color: var(--muted); }
 .legend { display: flex; gap: 12px; font-size: 12px; }
@@ -198,13 +198,13 @@ svg text { font-family: var(--mono); }
   <div id="warnings"></div>
   <div class="controls">
     <label>Block <select id="block"></select></label>
-    <label>Zoom <input type="range" id="zoom" min="1" max="40" step="0.5"></label>
+    <label>Output zoom <input type="range" id="zoom" min="1" max="40" step="0.5"></label>
     <span class="legend" id="legend"></span>
   </div>
   <div class="main">
     <div>
-      <section class="panel"><header><b>Before (as written)</b><span id="len-before"></span></header><div class="scroll" id="view-before"></div></section>
-      <section class="panel"><header><b>After atlas-opt</b><span id="len-after"></span></header><div class="scroll" id="view-after"></div></section>
+      <section class="panel"><header><b>Input: functional assembly, in program order</b><span id="len-before"></span></header><div class="scroll" id="view-before"></div></section>
+      <section class="panel"><header><b>Output: executable assembly, by issue cycle</b><span id="len-after"></span></header><div class="scroll" id="view-after"></div></section>
     </div>
     <aside class="panel details" id="details"></aside>
   </div>
@@ -230,11 +230,12 @@ function el(tag, attrs, parent, text) {
 }
 
 // One lane per engine; instructions whose bars would overlap stack in sub-rows.
-function layout(g, lanesUsed, ppc) {
+// The input has no timing, so its instructions get no busy bars.
+function layout(g, lanesUsed, ppc, timed) {
   const LEFT = 64, ROW = 18, PAD = 8;
   const rows = ENGINES.map(() => []);
   const pos = g.nodes.map(([text, , eng, cycle, done]) => {
-    const x = LEFT + cycle * ppc, barEnd = x + Math.max(3, (done + 1) * ppc);
+    const x = LEFT + cycle * ppc, barEnd = x + (timed ? Math.max(3, (done + 1) * ppc) : 3);
     const end = Math.max(barEnd, x + 6 + text.split(" ")[0].length * 7.2);
     let r = rows[eng].findIndex(e => e + 3 <= x);
     if (r < 0) r = rows[eng].push(0) - 1;
@@ -248,10 +249,10 @@ function layout(g, lanesUsed, ppc) {
   return { pos, top, height: y + 6, left: LEFT };
 }
 
-function drawPanel(side, g, other, lanesUsed) {
-  const ppc = state.zoom, host = $("view-" + side);
+function drawPanel(side, g, lanesUsed) {
+  const timed = side === "after", ppc = timed ? state.zoom : 18, host = $("view-" + side);
   host.innerHTML = "";
-  const L = layout(g, lanesUsed, ppc), maxLen = Math.max(g.length, other.length, 1);
+  const L = layout(g, lanesUsed, ppc, timed), maxLen = Math.max(g.length, 1);
   const width = L.left + maxLen * ppc + 60;
   const svg = el("svg", { width, height: L.height, viewBox: `0 0 ${width} ${L.height}` }, host);
   const defs = el("defs", {}, svg);
@@ -268,7 +269,7 @@ function drawPanel(side, g, other, lanesUsed) {
   }
   const endX = L.left + g.length * ppc;
   el("line", { x1: endX, x2: endX, y1: 18, y2: L.height, stroke: "var(--accent)", "stroke-dasharray": "4 3" }, grid);
-  el("text", { x: endX + 3, y: L.height - 4, "font-size": 10, fill: "var(--accent)" }, grid, "next block");
+  el("text", { x: endX + 3, y: L.height - 4, "font-size": 10, fill: "var(--accent)" }, grid, timed ? "next block" : "end");
   ENGINES.forEach((name, i) => {
     if (!lanesUsed[i]) return;
     el("rect", { x: 0, y: L.top[i], width, height: 1, fill: "var(--rule)" }, grid);
@@ -311,6 +312,7 @@ function select(side, i) {
   state.selected = { side, index: i };
   const g = panels[side].g, [text, line, eng, cycle, done] = g.nodes[i];
   const otherSide = side === "before" ? "after" : "before", og = panels[otherSide].g;
+  const where = side === "after" ? `issues at cycle ${cycle} · busy until cycle ${cycle + done}` : `instruction ${cycle + 1} of the block`;
   const twin = og.nodes.findIndex(n => n[0] === text && n[1] === line);  // same instruction in the other panel
   highlight(side, i);
   highlight(otherSide, twin >= 0 ? twin : null);
@@ -318,8 +320,8 @@ function select(side, i) {
     `<li><code>${esc(g.nodes[from ? s : t][0])}</code><br><span class="muted"><span style="color:var(--k${k})">${KINDS[k]}</span> · ${d} cycle${d === 1 ? "" : "s"} · ${esc(why)}</span></li>`
   ).join("") + "</ul>" : `<span class="muted">none</span>`;
   $("details").innerHTML = `
-    <div><h3>${side} · ${ENGINES[eng]}</h3><code>${esc(text)}</code></div>
-    <div class="muted">Line ${line} · issues at cycle ${cycle} · busy until cycle ${cycle + done}</div>
+    <div><h3>${side === "after" ? "output" : "input"} · ${ENGINES[eng]}</h3><code>${esc(text)}</code></div>
+    <div class="muted">Line ${line} · ${where}</div>
     <div><h3>Waits for</h3>${list(g.edges.filter(e => e[1] === i), true)}</div>
     <div><h3>Needed by</h3>${list(g.edges.filter(e => e[0] === i), false)}</div>`;
 }
@@ -328,37 +330,37 @@ function render() {
   const blk = DATA.blocks[state.block];
   state.selected = null;
   $("details").innerHTML = HINT;
-  $("len-before").textContent = `${fmt(blk.before.length)} cycles`;
+  $("len-before").textContent = `${fmt(blk.before.length)} instructions`;
   $("len-after").textContent = `${fmt(blk.after.length)} cycles · critical path ${fmt(blk.lb)}`;
   const lanes = ENGINES.map(() => 0);
   [blk.before, blk.after].forEach(g => g.nodes.forEach(n => { lanes[n[2]] = 1; }));
-  drawPanel("before", blk.before, blk.after, lanes);
-  drawPanel("after", blk.after, blk.before, lanes);
+  drawPanel("before", blk.before, lanes);
+  drawPanel("after", blk.after, lanes);
 }
 
 function fitZoom() {
   const blk = DATA.blocks[state.block];
   const avail = Math.max(300, $("view-before").clientWidth - 120);
-  state.zoom = Math.max(1, Math.min(40, avail / Math.max(1, blk.before.length, blk.after.length)));
+  state.zoom = Math.max(1, Math.min(40, avail / Math.max(1, blk.after.length)));
   $("zoom").value = state.zoom;
 }
 
-const b = DATA.before, a = DATA.after;
+const r = DATA.result;
 $("src").textContent = DATA.source;
 $("stats").innerHTML = [
-  ["Cycles", `${fmt(b.cycles)} → ${fmt(a.cycles)}`],
-  ["Speedup", `<span class="good">${(b.cycles / Math.max(1, a.cycles)).toFixed(2)}×</span>`],
-  ["Instructions issued", `${fmt(b.issued)} → ${fmt(a.issued)}`],
-  ["Delays issued", `${fmt(b.delays)} → ${fmt(a.delays)}`],
+  ["Input instructions", fmt(DATA.inputInstructions)],
+  ["Output cycles", fmt(r.cycles)],
+  ["Instructions issued", fmt(r.issued)],
+  ["Delays issued", fmt(r.delays)],
 ].map(([l, v]) => `<div class="stat"><small>${l}</small><b>${v}</b></div>`).join("");
-if (a.problems.length) $("warnings").innerHTML = `<div class="warn">The optimized program breaks timing rules:\n${esc(a.problems.join("\n"))}</div>`;
+if (r.problems.length) $("warnings").innerHTML = `<div class="warn">The executable assembly breaks timing rules:\n${esc(r.problems.join("\n"))}</div>`;
 $("legend").innerHTML = KINDS.map((k, i) => `<span><i style="background:var(--k${i})"></i>${k}</span>`).join("");
 DATA.blocks.forEach((blk, i) => {
   const o = document.createElement("option");
   o.value = i;
-  o.textContent = `${blk.name}: ${fmt(blk.before.length)} → ${fmt(blk.after.length)} cycles`;
+  o.textContent = `${blk.name}: ${fmt(blk.before.length)} instructions, ${fmt(blk.after.length)} cycles`;
   $("block").appendChild(o);
-  if (blk.before.length - blk.after.length > DATA.blocks[state.block].before.length - DATA.blocks[state.block].after.length) state.block = i;
+  if (blk.after.length > DATA.blocks[state.block].after.length) state.block = i;  // open on the longest block
 });
 $("block").value = state.block;
 fitZoom();
@@ -370,17 +372,15 @@ $("zoom").addEventListener("input", e => { state.zoom = +e.target.value; render(
 
 std::string renderHtml(const ProgramView& view) {
     std::ostringstream o;
-    o << "{\"source\":" << js(view.source) << ",\"before\":";
-    writeSim(o, view.before);
-    o << ",\"after\":";
-    writeSim(o, view.after);
+    o << "{\"source\":" << js(view.source) << ",\"inputInstructions\":" << view.inputInstructions << ",\"result\":";
+    writeSim(o, view.result);
     o << ",\"blocks\":[";
     for (size_t b = 0; b < view.blocks.size(); b++) {
         const BlockView& bv = view.blocks[b];
         o << (b ? "," : "") << "{\"name\":" << js(bv.name) << ",\"lb\":" << bv.lowerBound << ",\"before\":";
-        writeGraph(o, bv.before);
+        writeGraph(o, bv.input);
         o << ",\"after\":";
-        writeGraph(o, bv.after);
+        writeGraph(o, bv.output);
         o << "}";
     }
     o << "]}";

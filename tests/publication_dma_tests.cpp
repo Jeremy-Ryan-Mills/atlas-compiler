@@ -14,7 +14,7 @@ static std::string snapshot(const Code& code) {
     std::ostringstream out;
     auto instruction = [&](const Instr& in) {
         out << in.op->name << ':' << in.rd << ':' << in.rs1 << ':' << in.rs2 << ':' << in.imm
-            << ':' << in.immText << ':' << in.target << ':' << in.comment << ':' << in.keep
+            << ':' << in.immText << ':' << in.target << ':' << in.comment
             << ':' << in.release << ':' << in.line << '\n';
     };
     for (const Block& block : code.blocks) {
@@ -73,29 +73,24 @@ int main() {
     accept(release);  // idle entry
     accept("dma.config.ch0 x0\ndma.wait.ch0\n" + release);
     accept("dma.config.ch0 x0\ndma.wait.ch0\n" + release, {"schedule"});
-    reject("delay 8\ndma.config.ch0 x0\n" + release, "pending DMA on ch0");
+    reject("nop\ndma.config.ch0 x0\n" + release, "pending DMA on ch0");
     reject("dma.load.ch2 x0, x0, x0\n" + release, "pending DMA on ch2");
     reject("dma.store.ch7 x0, x0, x0\n" + release, "pending DMA on ch7");
     reject("dma.config.ch2 x0\ndma.wait.ch1\n" + release, "pending DMA on ch2");
     reject("dma.config.ch0 x0\ndma.wait.ch0\ndma.config.ch0 x0\n" + release, "pending DMA on ch0");
     reject("dma.config.ch0 x0\ndma.config.ch7 x0\n" + release, "ch0, ch7");
-    reject("dma.config.ch0 x0\ndelay 4095 # keep\n" + release, "pending DMA on ch0");
 
     // Wait before channel reuse, not just before release.
     reject("dma.config.ch0 x0\ndma.config.ch0 x0\ndma.wait.ch0\n" + release, "before channel reuse");
-    reject("dma.config.ch0 x0\ndelay 100 # keep\ndma.config.ch0 x0\ndma.wait.ch0\n" + release,
-           "before channel reuse");
     reject("dma.config.ch0 x0\ndma.wait.ch1\ndma.config.ch0 x0\ndma.wait.ch0\n" + release,
            "before channel reuse");
-    reject("dma.load.ch0 x0, x0, x0\ndelay 100 # keep\ndma.store.ch0 x0, x0, x0\ndma.wait.ch0\n" + release,
+    reject("dma.load.ch0 x0, x0, x0\ndma.store.ch0 x0, x0, x0\ndma.wait.ch0\n" + release,
            "before channel reuse");
     reject("beq x1, x0, idle\nnop\ndma.config.ch0 x0\njal x0, join\nnop\n"
            "idle:\naddi x2, x0, 0\njoin:\ndma.config.ch0 x0\ndma.wait.ch0\n" + release,
            "before channel reuse");
-    reject("addi x10, x0, 0\naddi x11, x0, 2\nloop:\ndma.config.ch0 x0\ndelay 100 # keep\n"
+    reject("addi x10, x0, 0\naddi x11, x0, 2\nloop:\ndma.config.ch0 x0\n"
            "addi x10, x10, 1\nblt x10, x11, loop\nnop\ndma.wait.ch0\n" + release,
-           "before channel reuse");
-    reject("dma.config.ch0 x0\njal x0, join\ndma.config.ch0 x0\njoin:\ndma.wait.ch0\n" + release,
            "before channel reuse");
     accept("dma.config.ch0 x0\ndma.wait.ch0\ndma.config.ch0 x0\ndma.wait.ch0\n" + release);
     accept("dma.config.ch0 x0\ndma.config.ch1 x0\ndma.wait.ch0\ndma.wait.ch1\n" + release);
@@ -135,41 +130,22 @@ int main() {
     dmaTerminator.blocks[0].body.pop_back();
     rejectCode(dmaTerminator, "pending DMA on ch5");
 
-    // Slot effects apply to both branch paths.
-    reject("jal x0, join\ndma.config.ch0 x0\njoin:\n" + release, "pending DMA on ch0");
-    accept("dma.config.ch0 x0\njal x0, join\ndma.wait.ch0\njoin:\n" + release);
-    accept("dma.config.ch0 x0\nbeq x1, x0, join\ndma.wait.ch0\naddi x2, x0, 0\njoin:\n" + release);
-    reject("dma.config.ch0 x0\njal x0, join\ndma.wait.ch1\njoin:\n" + release, "pending DMA on ch0");
-    accept(release + "jal x0, done\ndma.config.ch1 x0\ndone:\naddi x2, x0, 1\n");
-    reject(release + "jal x0, done\ndma.config.ch1 x0\ndone:\n" + release, "pending DMA on ch1");
+    // Functional assembly has no delay slots: the instruction after a branch runs only
+    // when the branch is not taken, and the one after a jump never runs.
+    reject("dma.config.ch0 x0\nbeq x1, x0, join\ndma.wait.ch0\njoin:\n" + release, "pending DMA on ch0");
+    accept("dma.config.ch0 x0\ndma.wait.ch0\nbeq x1, x0, join\ndma.config.ch1 x0\ndma.wait.ch1\njoin:\n" + release);
+    accept("jal x0, join\ndma.config.ch0 x0\njoin:\n" + release);
+    reject("dma.config.ch0 x0\njal x0, join\ndma.wait.ch0\njoin:\n" + release, "pending DMA on ch0");
 
     // Reject before passes mutate code or logs.
-    reject("delay 8\n" + release, "requires the schedule pass", {"strip-artifacts"});
+    reject(release, "requires the schedule pass", {"remove-nops"});
     reject(release, "requires the schedule pass", {"fill-delay-slots"});
-    reject("delay 8\njal x0, done\n" + release + "done:\nnop\n", "release in a delay slot");
-    reject("beq x0, x1, done\n" + release + "done:\nnop\n", "release in a delay slot");
-    reject("jal x0, done\nnop\ndead:\njal x0, done\n" + release + "done:\nnop\n", "release in a delay slot");
-    Code malformed = buildBlocks(parseAsm("delay 8\naddi x2, x0, 1\n"));
+    Code malformed = buildBlocks(parseAsm("addi x1, x0, 0\naddi x2, x0, 1\n"));
     malformed.blocks[0].body.back().release = true;
     rejectCode(malformed, "only supported on CSR");
 
-    Code direct = buildBlocks(parseAsm("delay 8\njal x0, done\n" + release + "done:\nnop\n"));
-    std::string before = snapshot(direct);
-    PassContext ctx;
-    bool rejected = false;
-    try { stripArtifacts(direct, ctx); }
-    catch (const std::runtime_error& error) {
-        rejected = true;
-        CHECK(std::string(error.what()).find("release in a delay slot") != std::string::npos);
-    }
-    CHECK(rejected);
-    CHECK(snapshot(direct) == before);
-    CHECK(ctx.log.empty());
-
-    // Unmarked code retains partial-pass support.
-    accept("dma.config.ch0 x0\ncsrrwi x0, x1, 0xC10\n", {"strip-artifacts"});
-    accept("dma.config.ch0 x0\ndelay 100 # keep\ndma.config.ch0 x0\ndma.wait.ch0\n"
-           "csrrwi x0, x1, 0xC10\n", {"strip-artifacts"});
+    // Unmarked code keeps partial-pass support.
+    accept("dma.config.ch0 x0\ncsrrwi x0, x1, 0xC10\n", {"remove-nops"});
     std::printf("publication DMA preflight: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

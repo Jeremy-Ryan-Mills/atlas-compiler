@@ -288,7 +288,6 @@ AsmProgram parseAsm(const std::string& text, const std::string& fileName) {
                 Instr& in = produced[i];
                 in.line = lineNo;
                 if (i == 0) in.comment = comment;
-                in.keep = in.op->opClass == OpClass::Delay && comment.find("keep") != std::string::npos;
                 in.release = release;
                 if (in.release && in.op->opClass != OpClass::Csr)
                     throw ParseError("atlas.release is only valid on a CSR instruction");

@@ -1,18 +1,18 @@
 """
 Before/after equivalence harness for Atlas kernel optimizations.
 
-Runs a kernel from `third_party/npu_model` as written, runs it again after an
-optimizer has rewritten its assembly, and compares the architectural state both
-runs leave behind. npu_model (rtl-match) asserts on every RTL scheduling
-violation, so an optimized kernel only passes if its own ordering and `delay`s
-are sufficient.
+Runs a kernel from `third_party/npu_model` as written (hand-scheduled executable
+assembly), removes its delays to get functional assembly, hands that to the
+optimizer, runs the executable assembly the optimizer returns, and compares the
+architectural state both runs leave behind. npu_model (rtl-match) asserts on
+every RTL scheduling violation, so the optimizer's output only passes if its own
+ordering and `delay`s are sufficient.
 """
 
 from __future__ import annotations
 
 import contextlib
 import io
-import re
 import shlex
 import subprocess
 import sys
@@ -20,6 +20,8 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
+
+from scripts.strip_delays import strip_delays
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 NPU_MODEL_ROOT = REPO_ROOT / "third_party" / "npu_model"
@@ -82,10 +84,14 @@ class Kernel:
         return entry[1]
 
     def source(self) -> str:
-        """Assembly text to hand to the optimizer."""
+        """The kernel's hand-scheduled (executable) assembly."""
         if self.asm_path is None:
             raise RuntimeError(f"{self.name} was not loaded from a .S file")
         return self.asm_path.read_text()
+
+    def functional_source(self) -> str:
+        """The same kernel as functional assembly: what the optimizer receives."""
+        return strip_delays(self.source())
 
 
 def discover_kernels() -> list[Kernel]:
@@ -193,27 +199,16 @@ def program_from_asm(text: str, memory_regions):
 # ---------------------------------------------------------------------------
 
 Optimizer = Callable[[str, Path], str]
-"""(input assembly, scratch dir) -> optimized assembly."""
+"""(functional assembly, scratch dir) -> executable assembly."""
 
 
 def identity_optimizer(source: str, workdir: Path) -> str:
+    """Deliberately wrong: returns the functional assembly as is, without delays.
+    Used to prove the harness catches a missing schedule."""
     return source
 
 
-_DELAY_LINE = re.compile(r"^\s*delay\b", re.IGNORECASE)
-
-
-def strip_delays_optimizer(source: str, workdir: Path) -> str:
-    """Deliberately unsafe: drops every `delay`. Used to prove the harness catches breakage."""
-    return "".join(
-        line for line in source.splitlines(keepends=True) if not _DELAY_LINE.match(line)
-    )
-
-
-BUILTIN_OPTIMIZERS: dict[str, Optimizer] = {
-    "identity": identity_optimizer,
-    "strip-delays": strip_delays_optimizer,
-}
+BUILTIN_OPTIMIZERS: dict[str, Optimizer] = {"identity": identity_optimizer}
 
 
 def external_optimizer(command: list[str]) -> Optimizer:
@@ -223,8 +218,8 @@ def external_optimizer(command: list[str]) -> Optimizer:
     """
 
     def run(source: str, workdir: Path) -> str:
-        in_path = workdir / "before.S"
-        out_path = workdir / "after.S"
+        in_path = workdir / "functional.S"
+        out_path = workdir / "executable.S"
         in_path.write_text(source)
         completed = subprocess.run(
             [*command, str(in_path), "-o", str(out_path)],
@@ -291,7 +286,8 @@ def check_equivalence(
     Raises `BaselineError` if the original kernel is broken, `OptimizerError` if
     the optimizer fails, and `EquivalenceError` if the optimized kernel doesn't
     assemble, errors in the simulator, doesn't finish, or leaves different bytes
-    in any compared region. `workdir` keeps before.S / after.S for debugging.
+    in any compared region. `workdir` keeps original.S (npu_model's hand-scheduled
+    kernel), functional.S (the optimizer's input) and executable.S (its output).
     """
     program = kernel.program()
     max_cycles = getattr(program, "kernel_max_cycles", max_cycles)
@@ -305,10 +301,11 @@ def check_equivalence(
         raise BaselineError(f"{kernel.name} did not finish in {max_cycles} cycles")
     _check_golden(kernel, program, before)
 
-    source = kernel.source()
-    (workdir / "before.S").write_text(source)
-    optimized_source = optimizer(source, workdir)
-    after_path = workdir / "after.S"
+    functional = kernel.functional_source()
+    (workdir / "original.S").write_text(kernel.source())
+    (workdir / "functional.S").write_text(functional)
+    optimized_source = optimizer(functional, workdir)
+    after_path = workdir / "executable.S"
     after_path.write_text(optimized_source)
 
     try:

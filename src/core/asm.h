@@ -46,7 +46,6 @@ struct Instr {
     std::string immText;      // immediate as written in the source, reused when printing
     std::string target;       // branch / jal label
     std::string comment;      // trailing comment, without the '#'
-    bool keep = false;        // "delay N # keep" is never removed by the optimizer
     bool release = false;     // "atlas.release": complete prior work before this CSR
     int line = 0;             // source line, 0 if created by the optimizer
 };

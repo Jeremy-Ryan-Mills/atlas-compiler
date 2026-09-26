@@ -47,7 +47,7 @@ def test_release_on_third_iteration_after_matching_dma_wait(
         'csrrw x0, x10, 0xC10 # atlas.release\n'
         'blt x10, x11, loop\nnop\n'
     )
-    optimized = publication_compiler(source, publication_dir)
+    optimized = publication_compiler(harness.strip_delays(source), publication_dir)
     before = observe(source, hardware_config_cls, publication_dir / 'reference',
                      dma_scale=dma_scale, expected_dbg0=3)
     after = observe(optimized, hardware_config_cls, publication_dir / 'optimized',
@@ -63,10 +63,10 @@ def _must_reject_pending_path(source, compiler, hardware_config_cls, directory, 
                      dma_scale=10, expected_dbg0=expected_dbg0)
     assert before['active_engines'] == ()
     try:
-        optimized = compiler(source, directory)
+        optimized = compiler(harness.strip_delays(source), directory)
     except harness.OptimizerError as error:
         assert 'atlas.release' in str(error) and 'pending DMA' in str(error)
-        assert not (directory / 'after.S').exists()
+        assert not (directory / 'executable.S').exists()
         return
     after = observe(optimized, hardware_config_cls, directory / 'accepted-optimized',
                     dma_scale=10, expected_dbg0=expected_dbg0)
