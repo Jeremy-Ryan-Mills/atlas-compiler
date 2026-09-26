@@ -94,3 +94,10 @@ of `--atlas-opt`.
 and variable DMA latency. `tests/test_publication*.py` checks data and engine
 state at the expected completion signal, including MXU source reuse, branches,
 loops, and DMA channel reuse. C++ tests check timing, metadata, and reservations.
+
+## CI
+
+`.github/workflows/tests.yml` runs on every pull request and every push to `main`:
+it builds atlas-opt, runs the C++ tests (`ctest`), and runs this pytest suite with
+`uv run --locked pytest`. A PR can merge only when the `tests` check passes. Run the
+same checks locally with `ctest --test-dir build` and `uv run pytest`.
