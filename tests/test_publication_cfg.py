@@ -44,7 +44,7 @@ def test_release_on_third_iteration_after_matching_dma_wait(
         'addi x7, x0, 32\nlui x1, 1\naddi x10, x0, 0\naddi x11, x0, 3\n'
         'loop:\ndma.load.ch0 x1, x0, x7\nvstore m0, 0(x0)\ndma.wait.ch0\n'
         'delay 40\naddi x10, x10, 1\n'
-        'csrrw x0, x10, 0xC10 # atlas.release\n'
+        'csrrw x0, x10, 0xC10 # atlas.complete\n'
         'blt x10, x11, loop\nnop\n'
     )
     optimized = publication_compiler(source, publication_dir)
@@ -65,7 +65,7 @@ def _must_reject_pending_path(source, compiler, hardware_config_cls, directory, 
     try:
         optimized = compiler(source, directory)
     except harness.OptimizerError as error:
-        assert 'atlas.release' in str(error) and 'pending DMA' in str(error)
+        assert 'atlas.complete' in str(error) and 'pending DMA' in str(error)
         assert not (directory / 'after.S').exists()
         return
     after = observe(optimized, hardware_config_cls, directory / 'accepted-optimized',
@@ -96,7 +96,7 @@ def test_release_rejects_dma_carried_back_to_entry(
     # First entry is idle; the backedge carries DMA into the second release.
     source = (
         'entry:\naddi x10, x10, 1\ndelay 300\n'
-        'csrrw x0, x10, 0xC10 # atlas.release\n'
+        'csrrw x0, x10, 0xC10 # atlas.complete\n'
         'addi x11, x0, 2\nbge x10, x11, done\nnop\n'
         'addi x7, x0, 32\nlui x1, 1\ndma.load.ch0 x1, x0, x7\n'
         'jal x0, entry\nnop\ndone:\naddi x12, x0, 9\n'

@@ -63,7 +63,7 @@ int main(int argc, char** argv) {
     }
 
     try {
-        AsmProgram original = readAsmFile(input);
+        AsmProgram original = readAsmFile(input, checkOnly);
         SimResult before = simulate(original);
         if (checkOnly) {
             std::cout << input << ": " << before.cycles << " cycles, " << before.issued << " instructions issued ("

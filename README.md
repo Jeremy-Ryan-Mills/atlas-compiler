@@ -39,20 +39,25 @@ Scheduled halts use a NOP guard after delays, including across labels;
 `# keep` preserves the delay immediate. The checker reports unfinished work at
 halt. Robust DMA scheduling reserves remaining port use across waits and gaps.
 
-Mark a completion CSR with `# atlas.release`:
+Use `atlas.complete <value>, <CSR>` to signal completion (or, to write a register
+value, use `atlas.complete xN, <CSR>`):
 
 ```asm
 vstore m0, 0(x0)
-csrrwi x0, x1, 0xC10 # atlas.release
+atlas.complete 1, 0xC10
 ```
 
-Prior fixed-latency work must finish before the CSR executes. Each possibly pending
-DMA channel needs a matching wait on every path to release and before reuse.
-Releases in delay slots or pipelines without `schedule` are rejected. Preserve
-the exact, case-sensitive, whitespace-delimited token during preprocessing;
-printing and reoptimization retain it.
+Immediate values (0–31) emit `csrrwi`; register operands (`xN`) emit `csrrw`.
+Both emit `# atlas.complete` for `--check`. Input must use the `atlas.complete`
+instruction; annotated CSR writes are rejected.
 
-Releases assume idle entry; unmarked CSR behavior is unchanged. A release provides
+Prior fixed-latency work must finish before the CSR executes. Each possibly pending
+DMA channel needs a matching wait on every path to completion and before reuse.
+Completions in delay slots or pipelines without `schedule` are rejected. Preserve
+the exact, case-sensitive, whitespace-delimited token during preprocessing;
+printing retains it for checking the output.
+
+Completions assume idle entry; unmarked CSR behavior is unchanged. Completion provides
 no host acknowledgment, buffer ownership, or IMEM-slot exit proof.
 `--check` checks modeled completion; optimization additionally requires explicit
 DMA waits on every path.

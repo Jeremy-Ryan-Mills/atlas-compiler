@@ -22,7 +22,7 @@ void stripArtifacts(Code& code, PassContext& ctx) {
     for (const Block& b : code.blocks)
         if (b.slot && b.slot->release)
             throw std::runtime_error("line " + std::to_string(b.slot->line) +
-                                     ": atlas.release in a delay slot is not supported by strip-artifacts");
+                                     ": atlas.complete in a delay slot is not supported by strip-artifacts");
     int removed = 0;
     for (Block& b : code.blocks) {
         std::vector<Instr> kept;

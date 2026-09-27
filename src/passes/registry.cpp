@@ -23,11 +23,11 @@ void validateReleaseDma(const Code& code) {
     for (const Block& block : code.blocks) {
         visitInstructions(block, [](const Instr& in) {
             if (in.release && in.op->opClass != OpClass::Csr)
-                throw std::runtime_error("line " + std::to_string(in.line) + ": atlas.release is only supported on CSR instructions");
+                throw std::runtime_error("line " + std::to_string(in.line) + ": atlas.complete is only supported on CSR instructions");
         });
         if (block.slot && block.slot->release)
             throw std::runtime_error("line " + std::to_string(block.slot->line) +
-                                     ": atlas.release in a delay slot is not supported by the optimizer");
+                                     ": atlas.complete in a delay slot is not supported by the optimizer");
     }
     if (code.blocks.empty()) return;
 
@@ -42,12 +42,12 @@ void validateReleaseDma(const Code& code) {
         queued[index] = false;
         const Block& block = code.blocks[index];
         if (block.unknownSuccs)
-            throw std::runtime_error("atlas.release requires known control-flow successors");
+            throw std::runtime_error("atlas.complete requires known control-flow successors");
         unsigned pending = entry[index];
         visitInstructions(block, [&](const Instr& in) { pending = dmaAfter(in, pending); });
         for (int successor : block.succs) {
             if (successor < 0 || successor >= (int)code.blocks.size())
-                throw std::runtime_error("atlas.release encountered an invalid control-flow successor");
+                throw std::runtime_error("atlas.complete encountered an invalid control-flow successor");
             unsigned joined = entry[successor] | pending;
             if (!reached[successor] || joined != entry[successor]) {
                 reached[successor] = true;
@@ -67,7 +67,7 @@ void validateReleaseDma(const Code& code) {
                 (pending & (1u << in.op->channel))) {
                 std::string channel = "ch" + std::to_string(in.op->channel);
                 throw std::runtime_error("line " + std::to_string(in.line) +
-                                         ": atlas.release cannot prove DMA channel " + channel +
+                                         ": atlas.complete cannot prove DMA channel " + channel +
                                          " idle before " + in.op->name + "; add dma.wait." + channel +
                                          " before channel reuse");
             }
@@ -79,7 +79,7 @@ void validateReleaseDma(const Code& code) {
                         channels += "ch" + std::to_string(channel);
                     }
                 throw std::runtime_error("line " + std::to_string(in.line) +
-                                         ": atlas.release may publish with pending DMA on " + channels +
+                                         ": atlas.complete may publish with pending DMA on " + channels +
                                          "; add matching dma.wait instructions on every reaching path");
             }
             pending = dmaAfter(in, pending);
@@ -144,7 +144,7 @@ void runPasses(Code& code, const std::vector<std::string>& names, PassContext& c
     if (hasRelease) {
         if (!schedules)
             throw std::runtime_error("line " + std::to_string(firstReleaseLine) +
-                                     ": atlas.release requires the schedule pass");
+                                     ": atlas.complete requires the schedule pass");
         validateReleaseDma(code);
     }
     for (const Pass& p : allPasses()) {
