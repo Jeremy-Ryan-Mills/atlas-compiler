@@ -2,6 +2,8 @@
 """Check that performance measurements require correctness and a real window."""
 
 import json
+from contextlib import redirect_stderr
+import io
 from pathlib import Path
 import sys
 import tempfile
@@ -9,7 +11,7 @@ import types
 import unittest
 
 sys.path.insert(0, str(Path(__file__).absolute().parents[1]))
-from rtlgraph_perf import capture_signal_map, fixture_info, performance_result
+from rtlgraph_perf import capture_signal_map, fixture_info, main, performance_result, probe_host_result
 import rtlgraph_mxu1_vcd as selection
 
 
@@ -67,6 +69,52 @@ class PerfTests(unittest.TestCase):
     def test_hardware_bank_assertion_cannot_be_functional_pass(self):
         log = self.log + 'Assertion failed: MregFile bank conflict: multiple read ports targeting physical bank 0 (m0 or m32)\n'
         self.assertEqual(performance_result(self.run, log, 'example', 1024)['status'], 'CHECK_FAILED')
+
+    def test_vpu_capture_requires_completion_binding_signals(self):
+        signals = {key: value for key, value in selection.PERF_SIGNALS.items()
+                   if key.startswith(('scalar.', 'csr.')) or key in ('clock', 'reset')}
+        probe = types.SimpleNamespace(SIGNALS=signals)
+        self.assertEqual(capture_signal_map(probe, banks=False, vpu=True), signals)
+        for field in signals:
+            broken = types.SimpleNamespace(SIGNALS={key: value for key, value in signals.items() if key != field})
+            with self.assertRaises(ValueError):
+                capture_signal_map(broken, banks=False, vpu=True)
+        for flags in ({'banks': True, 'vpu': True}, {'banks': False, 'mxu0': True, 'vpu': True},
+                      {'banks': True, 'mxu0': True}):
+            with self.assertRaisesRegex(ValueError, 'mutually exclusive'):
+                capture_signal_map(probe, **flags)
+
+    def test_probe_host_success_is_insufficient_for_numerical_validation(self):
+        log = self.log.replace('example — all DRAM checks passed', 'example')
+        self.assertEqual(probe_host_result(self.run, log, 'example')['status'], 'HOST_COMPLETION_ONLY')
+        for bad in (log.replace('DBG0 = 1', 'DBG0 = 2'), log.replace('0x00000005', '0x00000003'),
+                    log.replace('dbg1_cycles = 290', ''), log + 'dbg1_cycles = 291\n',
+                    log + 'DBG0 = 1\n', log + 'status = 0x00000005\n'):
+            self.assertNotEqual(probe_host_result(self.run, bad, 'example')['status'], 'HOST_COMPLETION_ONLY')
+
+    def test_probe_validation_cannot_replace_golden_validation_silently(self):
+        args = ['--smoke-manifest', '/unused/smoke.json', '--assembly', '/unused/probe.S',
+                '--output', '/unused/output']
+        invalid = [[], ['--vpu-probe'], ['--vpu-probe', '--capture-vpu', '--golden-json', '/unused/golden.json'],
+                   ['--vpu-probe', '--capture-vpu', '--capture-mxu0'],
+                   ['--vpu-probe', '--capture-vpu', '--capture-banks']]
+        for extra in invalid:
+            with self.subTest(extra=extra), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                main(args + extra)
+            self.assertEqual(error.exception.code, 2)
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory) / 'probe.json'
+            fixture.write_text('{"dram_preloads": [], "dram_checks": []}')
+            with self.assertRaisesRegex(ValueError, 'nonempty DRAM golden checks'):
+                fixture_info(fixture)
+
+    def test_probe_host_failure_never_becomes_a_completion_observation(self):
+        log = self.log.replace('example — all DRAM checks passed', 'example')
+        for run in ({**self.run, 'returncode': 1}, {**self.run, 'timed_out': True}, {**self.run, 'interrupted': True}):
+            self.assertNotEqual(probe_host_result(run, log, 'example')['status'], 'HOST_COMPLETION_ONLY')
+        for bad in (log + '*** FAILED ***', log + 'Assertion failed: VPU conflict',
+                    log.replace('dbg1_cycles = 290', 'dbg1_cycles = 0'), log.replace('*** PASSED ***', 'unrecognized')):
+            self.assertNotEqual(probe_host_result(self.run, bad, 'example')['status'], 'HOST_COMPLETION_ONLY')
 
 
 if __name__ == '__main__':

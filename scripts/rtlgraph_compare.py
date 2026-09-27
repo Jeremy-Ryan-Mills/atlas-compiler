@@ -11,7 +11,7 @@ from rtlgraph_completion import summarize
 from rtlgraph_kernel import assemble, instruction_words, load_assembler
 from rtlgraph_mxu1_capture import verify_artifact
 from rtlgraph_s0 import artifact, timestamp
-from rtlgraph_schedule import split
+from rtlgraph_schedule import compute_slice, split
 
 
 def require(condition, message):
@@ -54,6 +54,7 @@ def compare(original, candidates, candidate_manifest):
     require(static['schema'] == 'atlas.rtlgraph.schedule-experiment.v1' and static['status'] == 'model_candidates_ready', 'invalid candidate manifest')
     require(set(candidates) <= set(static['cases']), 'unknown candidate name')
     results, baseline_parts, baseline_runtime, baseline_golden = {}, None, None, None
+    baseline_wrapper = None
     for name, path in [('original', original), *candidates.items()]:
         run = json.loads(path.read_text())
         completion = summarize(path)  # Recheck full execution, goldens, and marker binding.
@@ -64,6 +65,15 @@ def compare(original, candidates, candidate_manifest):
         parts = split(source.read_text())
         encoded = (assemble(assembler, parts.prefix), assemble(assembler, parts.end_marker + parts.suffix),
                    Counter(instruction_words(assembler, parts.body, include_idle=False)))
+        if 'memory_wrapper' in static:
+            compute = compute_slice(parts.body, preserve_memory_wrapper=True)
+            wrapper = (assemble(assembler, compute.prefix), assemble(assembler, compute.suffix))
+            if name == 'original':
+                baseline_wrapper = wrapper
+            require(wrapper == baseline_wrapper, 'timed memory setup or writeback wrapper changed')
+            recorded = static['memory_wrapper']
+            require(wrapper == (recorded['prefix_words'], recorded['suffix_words']),
+                    'timed memory wrapper differs from prepared experiment')
         runtime = (run['simulator']['sha256'],
                    sorted((entry['relative_path'], entry['sha256']) for entry in run['runtime_files']),
                    sorted((key, entry['sha256']) for key, entry in run['runtime_libraries'].items()),
@@ -102,6 +112,7 @@ def compare(original, candidates, candidate_manifest):
             'driver': artifact(Path(__file__).resolve()), 'candidate_manifest': artifact(candidate_manifest),
             'cases': results, 'comparisons': comparisons,
             'identical_setup_suffix_and_non_idle_operations': True, 'identical_runtime_and_golden': True,
+            **({'identical_timed_memory_wrapper': True} if 'memory_wrapper' in static else {}),
             'scope': {'csr': 'Original counter locations, with candidate modeled completion drain before ending counter. Original matmul windows can end at final-pop issue, before completion.',
                       'completion': 'First instruction or first counter through DBG0 following final DMA.WAIT; ECALL edge is not captured.',
                       'profile_attribution': 'Compare same-priority built-in/profile CSR windows; differing priority is a separate scheduling choice.'},

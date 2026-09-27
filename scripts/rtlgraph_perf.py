@@ -78,10 +78,19 @@ def performance_result(run: dict, log: str, name: str, expected_checks: int) -> 
             "counter_caveat": "CSR counter reads may suppress an increment; report observed bracket values without treating them as waveform edge counts"}
 
 
-def capture_signal_map(selection, *, banks: bool, mxu0: bool = False) -> dict:
+def capture_signal_map(selection, *, banks: bool, mxu0: bool = False, vpu: bool = False) -> dict:
+    if sum((banks, mxu0, vpu)) > 1:
+        raise ValueError("Engine-specific and bank capture modes are mutually exclusive")
+    if vpu:
+        from rtlgraph_mxu1_vcd import PERF_SIGNALS
+        signals = selection.SIGNALS
+        for field, signal in PERF_SIGNALS.items():
+            if field.startswith(('scalar.', 'csr.')) and signals.get(field) != signal:
+                raise ValueError("VPU capture must retain complete scalar and CSR signals")
+        if any(field not in signals or signals[field][1] != 1 for field in ('clock', 'reset')):
+            raise ValueError("VPU capture requires one-bit clock and reset")
+        return signals
     if mxu0:
-        if banks:
-            raise ValueError("MXU0 and MXU1 bank capture modes are mutually exclusive")
         return selection.SIGNALS
     signals = selection.BANK_SIGNALS if banks else selection.PERF_SIGNALS
     if banks and any(signals.get(field) != signal for field, signal in selection.PERF_SIGNALS.items()):
@@ -89,24 +98,49 @@ def capture_signal_map(selection, *, banks: bool, mxu0: bool = False) -> dict:
     return signals
 
 
+def probe_host_result(run: dict, log: str, name: str) -> dict:
+    """Host completion alone cannot distinguish a probe's aliased failure code."""
+    if run.get('interrupted'):
+        return {'status': 'INTERRUPTED'}
+    status = classify(run['returncode'], run['timed_out'], log,
+                      f'*** PASSED *** ({name})', require_mxu_completion=True)
+    if status != 'PASS':
+        return {'status': status}
+    dbg0 = re.findall(r'^\s*DBG0\s*=\s*([0-9]+)\s*$', log, re.MULTILINE)
+    statuses = re.findall(r'^\s*status\s*=\s*(0x[0-9a-fA-F]+)\s*$', log, re.MULTILINE)
+    if dbg0 != ['1'] or len(statuses) != 1 or int(statuses[0], 16) & 7 != 5:
+        return {'status': 'MISSING_OR_AMBIGUOUS_COMPLETION'}
+    cycles = re.findall(r'^\s*dbg1_cycles\s*=\s*([0-9]+)\s*$', log, re.MULTILINE)
+    if len(cycles) != 1 or int(cycles[0]) <= 0:
+        return {'status': 'MISSING_OR_AMBIGUOUS_METRIC'}
+    return {'status': 'HOST_COMPLETION_ONLY', 'metrics': {'dbg1_cycles': int(cycles[0])},
+            'scope': 'Requires independent waveform binding of every numerical check and success PC.'}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--smoke-manifest", type=Path, required=True)
     parser.add_argument("--assembly", type=Path, required=True)
-    parser.add_argument("--golden-json", type=Path, required=True)
+    validation = parser.add_mutually_exclusive_group(required=True)
+    validation.add_argument("--golden-json", type=Path)
+    validation.add_argument("--vpu-probe", action="store_true", help="Validate the exact binary/reduction probe success path and scalar numerical spot checks")
     parser.add_argument("--output", type=Path, required=True, help="New isolated output directory")
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--capture", action="store_true", help="Passively capture the expanded MXU1 performance signal map")
     parser.add_argument("--capture-banks", action="store_true", help="Also capture actual MregFile P0/P1 reads; implies --capture")
     parser.add_argument("--capture-mxu0", action="store_true", help="Capture the separate MXU0 overlap map; implies --capture")
+    parser.add_argument("--capture-vpu", action="store_true", help="Capture VPU row events and scalar/CSR timing; implies --capture")
     parser.add_argument("--timeout-seconds", type=float, default=900)
     args = parser.parse_args(argv)
-    if args.capture_mxu0 and args.capture_banks:
-        parser.error("--capture-mxu0 and --capture-banks are mutually exclusive")
-    args.capture = args.capture or args.capture_banks or args.capture_mxu0
+    if args.vpu_probe and not args.capture_vpu:
+        parser.error("--vpu-probe requires --capture-vpu for independent success-path checking")
+    if sum((args.capture_mxu0, args.capture_banks, args.capture_vpu)) > 1:
+        parser.error("--capture-mxu0, --capture-banks, and --capture-vpu are mutually exclusive")
+    args.capture = args.capture or args.capture_banks or args.capture_mxu0 or args.capture_vpu
     if args.timeout_seconds <= 0:
         parser.error("Timeout must be positive")
-    smoke_path, assembly, golden, output = map(checked_path, (args.smoke_manifest, args.assembly, args.golden_json, args.output))
+    smoke_path, assembly, output = map(checked_path, (args.smoke_manifest, args.assembly, args.output))
+    golden = checked_path(args.golden_json) if args.golden_json else None
     if not re.fullmatch(r"[A-Za-z0-9_]+", assembly.stem):
         parser.error("Assembly filename stem must contain only letters, digits, and underscores")
     if output == smoke_path.parent or smoke_path.parent in output.parents:
@@ -115,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("Output cannot be inside the source assembly directory")
     output.mkdir(parents=True, exist_ok=False)
     manifest = output / "manifest.json"
-    record = {"schema_version": 1, "kind": "rtlgraph-perf-replay", "config": "EE290SimConfig",
+    record = {"schema_version": 1, "kind": "rtlgraph-vpu-probe-replay" if args.vpu_probe else "rtlgraph-perf-replay", "config": "EE290SimConfig",
               "status": "preparing", "started_utc": timestamp(), "commands": [],
               "simulator_build_lineage": "UNVERIFIED: recorded cached binary; saved FIRRTL equality is not source-to-binary build proof"}
 
@@ -140,21 +174,36 @@ def main(argv: list[str] | None = None) -> int:
         for info in source["toolchain_link_inputs"].values():
             verify_artifact(info)
         record["inputs"] = {"driver": artifact(checked_path(__file__)), "smoke_manifest": artifact(smoke_path),
-                            "assembly": artifact(assembly), "golden_fixture": artifact(golden),
+                            "assembly": artifact(assembly),
                             "assembler": artifact(assembler), "gcc": artifact(gcc)}
         record["helper_inputs"] = {name: artifact(checked_path(Path(__file__).parent / name)) for name in
                                   ("rtlgraph_smoke.py", "rtlgraph_mxu1_capture.py", "rtlgraph_s0.py")}
-        record["fixture"] = fixture_info(golden)
+        if golden:
+            record['inputs']['golden_fixture'] = artifact(golden)
+            record['fixture'] = fixture_info(golden)
+        else:
+            from rtlgraph_kernel import load_assembler
+            import rtlgraph_vpu_probes as probe
+            contract = probe.probe_contract(assembly.read_text(), load_assembler(assembler))
+            contract_path = output / 'probe-contract.json'
+            contract_path.write_text(json.dumps(contract, indent=2) + '\n')
+            record['probe_contract'] = artifact(contract_path)
+            record['helper_inputs']['rtlgraph_vpu_probes.py'] = artifact(checked_path(probe.__file__))
+            record['helper_inputs']['rtlgraph_kernel.py'] = artifact(checked_path(Path(__file__).with_name('rtlgraph_kernel.py')))
         record["toolchain_link_inputs"] = source["toolchain_link_inputs"]
         record["saved_fir_matches_fresh_fir"] = source["saved_fir_matches_fresh_fir"]
-        record["measurement_scope"] = MEASUREMENT_SCOPE
+        record["measurement_scope"] = ('Sum of the original singleton VPU CSR windows; numerical checks cover one BF16 value per operation.'
+                                       if args.vpu_probe else MEASUREMENT_SCOPE)
         converter_home = checked_path(VPD2VCD.parent.parent)
         env = conversion_environment(source["environment"], converter_home)
         record["environment"] = {key: env[key] for key in ("PATH", "LD_LIBRARY_PATH", "VCS_HOME", "VPD_HOME", "VCS_ARCH_OVERRIDE", "VCS_MODE_FLAG")}
         record["license_environment_present"] = bool(env.get("SNPSLMD_LICENSE_FILE") or env.get("LM_LICENSE_FILE"))
         name = assembly.stem
         generated_c, binary = output / f"atlas_{name}.c", output / f"atlas_{name}.riscv"
-        command([sys.executable, str(assembler), str(assembly), "--golden-json", str(golden), "--out-c", str(generated_c)], "assemble.log")
+        assemble_command = [sys.executable, str(assembler), str(assembly), '--out-c', str(generated_c)]
+        if golden:
+            assemble_command += ['--golden-json', str(golden)]
+        command(assemble_command, "assemble.log")
         record["generated_c"] = artifact(generated_c)
         for index, argv in enumerate(compile_commands(gcc, generated_c, binary, vector=False)):
             command(argv, f"build-{index}.log")
@@ -177,15 +226,17 @@ def main(argv: list[str] | None = None) -> int:
         copy_inputs(runtime / "coverage-template.vdb", coverage)
         argv = simulator_command(simulator, binary, runtime / "dramsim2_ini", coverage, name)
         if args.capture:
-            if args.capture_mxu0:
+            if args.capture_vpu:
+                import rtlgraph_vpu_vcd as selection
+            elif args.capture_mxu0:
                 import rtlgraph_mxu0_vcd as selection
             else:
                 import rtlgraph_mxu1_vcd as selection
-            signal_map = capture_signal_map(selection, banks=args.capture_banks, mxu0=args.capture_mxu0)
-            record["capture_kind"] = "mxu0_overlap" if args.capture_mxu0 else "mxu1_mreg_banks" if args.capture_banks else "mxu1_perf"
+            signal_map = capture_signal_map(selection, banks=args.capture_banks, mxu0=args.capture_mxu0, vpu=args.capture_vpu)
+            record["capture_kind"] = "vpu_rows" if args.capture_vpu else "mxu0_overlap" if args.capture_mxu0 else "mxu1_mreg_banks" if args.capture_banks else "mxu1_perf"
             record["signal_selection_driver"] = artifact(checked_path(selection.__file__))
             record["signals"] = {field: {"path": path, "width": width} for field, (path, width) in sorted(signal_map.items())}
-            engine = "mxu0" if args.capture_mxu0 else "mxu1"
+            engine = "vpu" if args.capture_vpu else "mxu0" if args.capture_mxu0 else "mxu1"
             tcl, vpd, trace, completed = output / "capture.tcl", output / f"{engine}.vpd", output / f"{engine}.vcd", output / "capture-complete.txt"
             tcl.write_text(capture_tcl(signal_map, vpd, completed))
             record["capture_tcl"] = artifact(tcl)
@@ -195,8 +246,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.run:
             result = command(argv, "simulation.log", require_success=False)
             log = Path(result["log"]["path"]).read_text(errors="replace")
-            record["result"] = performance_result(result, log, name, record["fixture"]["expected_check_words"])
-            record["status"] = "passed" if record["result"]["status"] == "PASS" else "failed"
+            record["result"] = (probe_host_result(result, log, name) if args.vpu_probe else
+                                performance_result(result, log, name, record["fixture"]["expected_check_words"]))
+            record["status"] = ("awaiting_probe_checks" if record['result']['status'] == 'HOST_COMPLETION_ONLY' else
+                                "passed" if record["result"]["status"] == "PASS" else "failed")
             save()
             if args.capture and vpd.is_file():
                 record["vpd"] = artifact(vpd)
@@ -215,7 +268,22 @@ def main(argv: list[str] | None = None) -> int:
                     raise ValueError("Simulator did not close the capture normally")
             elif args.capture:
                 raise ValueError("Requested VPD capture was not produced")
-        for role in ("assembly", "golden_fixture", "assembler", "gcc"):
+            if args.vpu_probe and record['result']['status'] == 'HOST_COMPLETION_ONLY':
+                from rtlgraph_mxu1_vcd import edge_samples, read_header
+                with trace.open() as stream:
+                    selected, timescale = read_header(stream, signal_map)
+                    observation = probe.analyze_samples(edge_samples(stream, selected, signal_map), contract)
+                verify_artifact(record['trace'])
+                verify_artifact(record['probe_contract'])
+                if observation['metrics']['csr_counter_delta'] != record['result']['metrics']['dbg1_cycles']:
+                    raise ValueError('Probe waveform cycle sum differs from host DBG1')
+                observation_path = output / 'probe-observation.json'
+                observation_path.write_text(json.dumps({**observation, 'timescale': timescale}, indent=2) + '\n')
+                record['probe_observation'] = artifact(observation_path)
+                record['result']['status'] = 'SPOT_CHECKS_PASS'
+                record['result']['scope'] = 'Original numerical spot checks and complete success path observed; remaining tensor elements and other inputs are not validated.'
+                record['status'] = 'passed'
+        for role in ("assembly", "assembler", "gcc") + (("golden_fixture",) if golden else ()):
             verify_artifact(record["inputs"][role])
         record["finished_utc"] = timestamp()
         save()

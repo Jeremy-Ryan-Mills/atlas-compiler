@@ -9,6 +9,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from rtlgraph_compare import compare
+from rtlgraph_kernel import assemble, load_assembler
+from rtlgraph_schedule import compute_slice, split
 from rtlgraph_s0 import artifact
 
 
@@ -88,6 +90,24 @@ class CompareTests(unittest.TestCase):
         self.static_record['cases'][name]['assembly'] = artifact(source)
         self.save_static()
 
+    def enable_memory_wrapper(self):
+        for name, source in self.sources.items():
+            text = source.read_text().replace('CSRR x20, 0xC00\n',
+                    'CSRR x20, 0xC00\nVLOAD 2, x6, 0\nDELAY 33\n')
+            text = text.replace('CSRR x21, 0xC00\n',
+                    'LI x7, 0x20001000\nVSTORE 4, x7, 0\nDELAY 33\nCSRR x21, 0xC00\n')
+            source.write_text(text)
+            self.completions[self.runs[name]]['assembly'] = artifact(source)
+            if name == 'original':
+                self.static_record['inputs']['source'] = artifact(source)
+            else:
+                self.static_record['cases'][name]['assembly'] = artifact(source)
+        compute = compute_slice(split(self.sources['original'].read_text()).body, preserve_memory_wrapper=True)
+        assembler = load_assembler(self.assembler)
+        self.static_record['memory_wrapper'] = {'prefix_words': assemble(assembler, compute.prefix),
+                                               'suffix_words': assemble(assembler, compute.suffix)}
+        self.save_static()
+
     def test_same_priority_profile_attribution(self):
         report = self.run_compare()
         self.assertTrue(report['identical_setup_suffix_and_non_idle_operations'])
@@ -96,6 +116,31 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(set(refs), {'original', 'builtin_critical'})
         self.assertEqual(refs['builtin_critical']['csr_counter_delta']['cycles_saved'], 10)
         self.assertEqual(refs['original']['csr_counter_delta']['cycles_saved'], 20)
+        self.assertNotIn('identical_timed_memory_wrapper', report)
+
+    def test_preserved_timed_memory_wrapper_is_independently_verified(self):
+        self.enable_memory_wrapper()
+        report = self.run_compare()
+        self.assertTrue(report['identical_timed_memory_wrapper'])
+
+    def test_changed_timed_load_delay_is_rejected(self):
+        self.enable_memory_wrapper()
+        self.change_source('VLOAD 2, x6, 0\nDELAY 33', 'VLOAD 2, x6, 0\nDELAY 34')
+        with self.assertRaisesRegex(ValueError, 'timed memory setup or writeback'):
+            self.run_compare()
+
+    def test_changed_timed_store_delay_is_rejected(self):
+        self.enable_memory_wrapper()
+        self.change_source('VSTORE 4, x7, 0\nDELAY 33', 'VSTORE 4, x7, 0\nDELAY 34')
+        with self.assertRaisesRegex(ValueError, 'timed memory setup or writeback'):
+            self.run_compare()
+
+    def test_recorded_wrapper_must_match_original(self):
+        self.enable_memory_wrapper()
+        self.static_record['memory_wrapper']['prefix_words'][-1] ^= 1
+        self.save_static()
+        with self.assertRaisesRegex(ValueError, 'timed memory wrapper differs from prepared'):
+            self.run_compare()
 
     def test_different_priority_is_not_attributed_to_profile(self):
         report = self.run_compare(('builtin_critical', 'profile_input'))

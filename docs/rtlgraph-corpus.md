@@ -2,7 +2,7 @@
 
 The [corpus helper](../scripts/rtlgraph_corpus.py) stages the existing `perf_*.S` programs without changing their encoded Atlas instructions. It adds only a missing `@PERF_REPORT` comment, records original/staged/assembler/golden/generator hashes, and reuses existing fixtures without running their generators. The original baremetal checkout stays read-only.
 
-There are 14 programs: 11 have nonempty DRAM checks, `perf_mm_single` has no output checks, and the VPU binary/reduction microbenchmarks have no JSON fixture and multiple timed regions with branches. The latter three require separate validation. A utilization threshold or `DBG0` value alone is not an arithmetic-correctness result; some microbenchmark failure codes can overlap the success value.
+There are 14 programs: 11 have nonempty DRAM checks, `perf_mm_single` has no output checks, and the VPU binary/reduction microbenchmarks have no JSON fixture and multiple timed regions with branches. The latter three require separate validation. The subsequent [VPU follow-up](rtlgraph-vpu-kernels.md#binary-and-reduction-probes) validates the two VPU probes through their original numerical spot checks and exact success paths; they remain distinct from full-output goldens. A utilization threshold or `DBG0` value alone is not an arithmetic-correctness result; some microbenchmark failure codes can overlap the success value.
 
 ```sh
 python3 -B scripts/rtlgraph_corpus.py prepare \
@@ -43,6 +43,6 @@ The [staged inventory](../build/rtlgraph-corpus/originals-1/inventory.json) reco
 | `perf_vec_layernorm_32x32` | 512 | 605 | 4,707 |
 | `perf_vec_rmsnorm_softmax` | 1,024 | 706 | 8,576 |
 
-`perf_mm_single`, `perf_vpu_binary`, and `perf_vpu_reduction` remain **unvalidated special cases**, not passing entries. The first lacks output goldens; the other two require branch-aware checking of multiple timed regions. No fixtures or sources were regenerated to fill those gaps.
+`perf_mm_single`, `perf_vpu_binary`, and `perf_vpu_reduction` were **unvalidated special cases** at this baseline checkpoint, not passing entries in its golden-backed report. The later [VPU follow-up](rtlgraph-vpu-kernels.md#binary-and-reduction-probes) checks the two VPU probes with branch-aware numerical spot-check validation. `perf_mm_single` still lacks output goldens. No fixtures or original sources were regenerated to fill those gaps.
 
 The CSR column measures each program's existing window, not necessarily full engine completion. Some original matrix kernels end that window at the last pop issue. The completion column includes setup and actual output/DMA waits; it reflects one memory-environment execution rather than a universal latency bound. Candidate comparisons must also include the observed first instruction and first counter through `DBG0`, after the final `DMA.WAIT`; the host halt status confirms eventual `ECALL` without locating its waveform edge. These checks do not establish full MXU0/MXU1/VPU temporal correctness, and the cached simulator's source-to-binary build lineage remains unverified. See [corpus scheduling and comparisons](rtlgraph-corpus-scheduling.md) for candidate-specific results and timing scope.
