@@ -54,7 +54,7 @@ def compare(original, candidates, candidate_manifest):
     require(static['schema'] == 'atlas.rtlgraph.schedule-experiment.v1' and static['status'] == 'model_candidates_ready', 'invalid candidate manifest')
     require(set(candidates) <= set(static['cases']), 'unknown candidate name')
     results, baseline_parts, baseline_runtime, baseline_golden = {}, None, None, None
-    baseline_wrapper = None
+    baseline_wrapper, baseline_control = None, None
     for name, path in [('original', original), *candidates.items()]:
         run = json.loads(path.read_text())
         completion = summarize(path)  # Recheck full execution, goldens, and marker binding.
@@ -79,11 +79,14 @@ def compare(original, candidates, candidate_manifest):
                    sorted((key, entry['sha256']) for key, entry in run['runtime_libraries'].items()),
                    runtime_options(run))
         golden = completion['golden_fixture']['sha256']
+        control = completion.get('replay_control')  # Independently audited by summarize().
         if name == 'original':
             baseline_parts, baseline_runtime, baseline_golden = encoded, runtime, golden
+            baseline_control = control
         require(encoded == baseline_parts, 'setup, suffix, or non-idle operations changed')
         require(runtime == baseline_runtime, 'simulator runtime differs between replays')
         require(golden == baseline_golden, 'golden fixtures differ between replays')
+        require(control == baseline_control, 'fixed-host replay controls differ between replays')
         completion_path = path.parent / 'completion.json'
         if completion_path.exists():
             # Historical reports retain their own driver identity.
@@ -112,6 +115,7 @@ def compare(original, candidates, candidate_manifest):
             'driver': artifact(Path(__file__).resolve()), 'candidate_manifest': artifact(candidate_manifest),
             'cases': results, 'comparisons': comparisons,
             'identical_setup_suffix_and_non_idle_operations': True, 'identical_runtime_and_golden': True,
+            **({'fixed_host_control': baseline_control} if baseline_control is not None else {}),
             **({'identical_timed_memory_wrapper': True} if 'memory_wrapper' in static else {}),
             'scope': {'csr': 'Original counter locations, with candidate modeled completion drain before ending counter. Original matmul windows can end at final-pop issue, before completion.',
                       'completion': 'First instruction or first counter through DBG0 following final DMA.WAIT; ECALL edge is not captured.',

@@ -17,6 +17,8 @@ The [unary experiment manifest](../build/rtlgraph-vpu-schedules/unary-exact-2/ma
 
 The [completed RTL comparison](rtlgraph-vpu-kernels.md#measured-unary-search-candidate) measures unary at **960→952 CSR cycles**, with all 1,536 golden words and row events passing. First issue through `DBG0` regresses **10,061→10,443 edges**; there is no observed whole-kernel speedup. The measured gain inside the original counter window is from scheduling, with numerical VPU timing unchanged.
 
+The subsequent [fixed-host control](rtlgraph-memory-overlap.md#measured-result) keeps both versions at 10,181 edges through completion: the same eight counter cycles are offset by eight suffix edges. A separate adapter then improves completion by admitting independent timed memory operations into the schedule. That broader memory/compute experiment does not change the fixed-operation VPU search results or their model-only optimality scope.
+
 ## Search contract
 
 The [solver admission checks](../scripts/rtlgraph_vpu_search.cpp#L116-L143) accept one unlabeled body of at most forty VPU instructions, plus an optional `ECALL` sentinel. Delays and no-op fillers are stripped. Accesses must be known MREG accesses; scalar operations, memory operations, external-register accesses, alternate ports, and extra resources with capacity greater than one are rejected. Every instruction must be legal alone, and every ordered pair must have monotone legal spacing. A nonmonotone conflict is rejected rather than replaced with an unsafe minimum distance.

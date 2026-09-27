@@ -84,6 +84,26 @@ class PerfTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'mutually exclusive'):
                 capture_signal_map(probe, **flags)
 
+    def test_lsu_capture_retains_timing_and_rejects_mixed_modes(self):
+        from rtlgraph_lsu_vcd import SIGNALS
+        lsu = types.SimpleNamespace(SIGNALS=SIGNALS)
+        self.assertEqual(capture_signal_map(lsu, banks=False, lsu=True), SIGNALS)
+        with self.assertRaisesRegex(ValueError, 'mutually exclusive'):
+            capture_signal_map(lsu, banks=False, vpu=True, lsu=True)
+        incomplete = types.SimpleNamespace(SIGNALS={k: v for k, v in SIGNALS.items() if k != 'scalar.fire'})
+        with self.assertRaises(ValueError):
+            capture_signal_map(incomplete, banks=False, lsu=True)
+
+    def test_control_requires_golden_and_bounded_capacity(self):
+        args = ['--smoke-manifest', '/unused/smoke.json', '--assembly', '/unused/probe.S', '--output', '/unused/output']
+        for extra in (['--vpu-probe', '--capture-vpu', '--control-program-words', '128'],
+                      ['--golden-json', '/unused/a.json', '--control-program-words', '0'],
+                      ['--golden-json', '/unused/a.json', '--control-program-words', '1025'],
+                      ['--golden-json', '/unused/a.json', '--control-program-words', '128', '--control-manifest', '/unused/base.json']):
+            with self.subTest(extra=extra), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                main(args + extra)
+            self.assertEqual(error.exception.code, 2)
+
     def test_probe_host_success_is_insufficient_for_numerical_validation(self):
         log = self.log.replace('example — all DRAM checks passed', 'example')
         self.assertEqual(probe_host_result(self.run, log, 'example')['status'], 'HOST_COMPLETION_ONLY')

@@ -82,6 +82,23 @@ class CompareTests(unittest.TestCase):
     def run_compare(self, names=('builtin_critical', 'profile_critical')):
         return compare(self.runs['original'], {name: self.runs[name] for name in names}, self.static)
 
+    def test_fixed_host_controls_must_match(self):
+        control = {'capacity_words': 128, 'elf_without_program_sha256': 'same',
+                   'template_binary_sha256': 'template'}
+        for completion in self.completions.values():
+            completion['replay_control'] = dict(control)
+        self.assertEqual(self.run_compare()['fixed_host_control'], control)
+
+    def test_changed_or_missing_host_control_is_rejected(self):
+        for completion in self.completions.values():
+            completion['replay_control'] = {'capacity_words': 128, 'elf_without_program_sha256': 'same'}
+        candidate = self.completions[self.runs['builtin_critical']]
+        for changed in (None, {'capacity_words': 129, 'elf_without_program_sha256': 'same'},
+                        {'capacity_words': 128, 'elf_without_program_sha256': 'different'}):
+            candidate['replay_control'] = changed
+            with self.subTest(changed=changed), self.assertRaisesRegex(ValueError, 'fixed-host'):
+                self.run_compare()
+
     def change_source(self, old, new):
         name = 'builtin_critical'
         source = self.sources[name]

@@ -99,10 +99,13 @@ def summarize(manifest_path: Path) -> dict:
     require(len(simulations) == 1, 'expected one recorded prepared simulator command')
     simulation = simulations[0]
     log = verify_artifact(simulation['log']).read_text(errors='replace')
-    functional = performance_result(simulation, log, assembly.stem, fixture_info(golden)['expected_check_words'])
-    require(functional['status'] == 'PASS' and functional == manifest['result'], 'functional result does not match the recorded successful replay')
     assembler = load_assembler(assembler_path)
     words = assemble(assembler, assembly.read_text())
+    from rtlgraph_replay_control import audit_control
+    control = audit_control(manifest, words)
+    host_name = control['host_name'] if control else assembly.stem
+    functional = performance_result(simulation, log, host_name, fixture_info(golden)['expected_check_words'])
+    require(functional['status'] == 'PASS' and functional == manifest['result'], 'functional result does not match the recorded successful replay')
     waits = {assemble(assembler, f'DMA.WAIT {channel}')[0] for channel in range(8)}
     signals = {key: (manifest['signals'][key]['path'], manifest['signals'][key]['width']) for key in FIELDS}
     with trace.open() as stream:
@@ -116,6 +119,8 @@ def summarize(manifest_path: Path) -> dict:
                   trace=manifest['trace'], timescale=timescale, functional_result=functional,
                   assembled_word_count=len(words),
                   assembled_words_sha256=hashlib.sha256(b''.join(struct.pack('<I', word) for word in words)).hexdigest())
+    if control:
+        report['replay_control'] = control
     return report
 
 
