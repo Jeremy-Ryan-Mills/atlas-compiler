@@ -6,6 +6,7 @@
 #include <stdexcept>
 
 #include "core/depgraph.h"
+#include "core/dma_flow.h"
 #include "core/reservations.h"
 #include "passes/pass.h"
 
@@ -13,15 +14,14 @@ static std::runtime_error scheduleError(const Instr& in, const std::string& why)
     return std::runtime_error("line " + std::to_string(in.line) + " (" + formatInstr(in) + "): " + why);
 }
 
-// Reorders and times one block. The block may assume an idle machine on entry and
-// drains (everything it started finishes) before its successors begin.
-static void scheduleBlock(Block& block, const RegValues& entry, bool robustDma, bool lastBlock, bool fallthroughHalt, uint32_t dmaRegs) {
+// Schedule one block. Fixed-latency engines drain between blocks; DMA uses waits.
+static void scheduleBlock(Block& block, const RegValues& entry, bool robustDma, bool lastBlock, bool fallthroughHalt, uint32_t dmaRegs, const IncomingDma* incomingDma) {
     std::vector<Instr> nodes = blockInstructions(block);
     int nb = (int)block.body.size(), n = (int)nodes.size();
     int term = block.terminator ? nb : -1;
     int slot = hasDelaySlot(block) ? nb + 1 : -1;
 
-    DepGraph g = buildGraph(nodes, entry, dmaRegs);
+    DepGraph g = buildGraph(nodes, entry, dmaRegs, incomingDma);
     for (int i = 0; i < n; i++) {
         if (!g.footprints[i].error.empty()) throw scheduleError(nodes[i], g.footprints[i].error);
         std::string alone = ReservationTable().conflict(nodes[i], g.footprints[i], 0);
@@ -59,8 +59,20 @@ static void scheduleBlock(Block& block, const RegValues& entry, bool robustDma, 
             if (!table.conflict(nodes[i], g.footprints[i], cycle).empty()) continue;
             best = i;
         }
-        // A dma.wait stalls the frontend until its transfer is done, so other work goes first.
-        if (best < 0 && bestWait >= 0 && (!otherWork || cycle >= release(bestWait))) {
+        // Prefer independent work until local DMA is expected to finish.
+        // Then prioritize critical waits; incoming waits may also win when they
+        // enable a new DMA launch that overlaps remaining ALU work.
+        bool unlocksDma = false;
+        if (bestWait >= 0 && release(bestWait) == 0 && best >= 0 && nodes[best].op->opClass == OpClass::Alu)
+            for (int e : g.out[bestWait]) {
+                int s = g.edges[e].to;
+                if (s < nb && waitingPreds[s] == 1 && earliest[s] <= cycle + 1 &&
+                    nodes[s].op->engine == Engine::Dma && nodes[s].op->opClass != OpClass::DmaWait)
+                    unlocksDma = true;
+            }
+        bool readyCriticalWait = bestWait >= 0 && best >= 0 && height[bestWait] > height[best] &&
+                                 ((release(bestWait) > 0 && cycle >= release(bestWait)) || unlocksDma);
+        if ((best < 0 || readyCriticalWait) && bestWait >= 0 && (!otherWork || cycle >= release(bestWait))) {
             // Idle cycles before a wait overlap the transfer; idle cycles after it do not.
             // So issue the wait just before its most critical waiting instruction can go.
             int firstUse = INT_MAX, critical = -1;
@@ -99,7 +111,7 @@ static void scheduleBlock(Block& block, const RegValues& entry, bool robustDma, 
         placed++;
     }
 
-    // Everything started in this block must finish before the next block starts.
+    // Drain fixed-latency work before successors.
     int drain = 0;
     for (int i = 0; i < nb; i++) drain = std::max(drain, issue[i] + g.footprints[i].doneAge + 1);
     // Kept delays need an extra guard cycle before halt, even across blocks.
@@ -136,6 +148,25 @@ static void scheduleBlock(Block& block, const RegValues& entry, bool robustDma, 
 void schedule(Code& code, PassContext& ctx) {
     std::vector<RegValues> entry = blockEntryValues(code);
     uint32_t dmaRegs = dmaOperandRegisters(flatten(code).instrs);
+    // Capture footprints before reordering changes the flow analysis's site IDs.
+    bool knownFlow = std::none_of(code.blocks.begin(), code.blocks.end(), [](const Block& b) { return b.unknownSuccs; });
+    std::vector<IncomingDma> incoming(code.blocks.size());
+    if (knownFlow) {
+        DmaFlow flow = analyzeDmaFlow(code);
+        std::vector<Footprint> commands;
+        for (size_t b = 0; b < code.blocks.size(); b++) {
+            RegValues regs = entry[b];
+            for (const Instr& in : blockInstructions(code.blocks[b])) {
+                if (in.op->engine == Engine::Dma && in.op->opClass != OpClass::DmaWait)
+                    commands.push_back(footprintOf(in, regs));
+                applyScalar(in, regs);
+            }
+        }
+        for (size_t b = 0; b < code.blocks.size(); b++)
+            for (int channel = 0; channel < 8; channel++)
+                for (int command : flow.before[b].front()[channel])
+                    incoming[b][channel].push_back(commands[command]);
+    }
     for (size_t bi = 0; bi < code.blocks.size(); bi++) {
         try {
             bool lastBlock = bi + 1 == code.blocks.size();
@@ -144,7 +175,8 @@ void schedule(Code& code, PassContext& ctx) {
             while (next < code.blocks.size() && code.blocks[next].body.empty() && !code.blocks[next].terminator) next++;
             bool fallthroughHalt = next < code.blocks.size() && code.blocks[next].body.empty() &&
                                    code.blocks[next].terminator && code.blocks[next].terminator->op->opClass == OpClass::Halt;
-            scheduleBlock(code.blocks[bi], entry[bi], ctx.robustDma, lastBlock, fallthroughHalt, dmaRegs);
+            scheduleBlock(code.blocks[bi], entry[bi], ctx.robustDma, lastBlock, fallthroughHalt, dmaRegs,
+                          knownFlow ? &incoming[bi] : nullptr);
         } catch (const std::runtime_error& e) {
             throw std::runtime_error("block " + std::to_string(bi) + ": " + e.what());
         }

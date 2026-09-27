@@ -1,4 +1,4 @@
-"""Repair missing waits, using explicit-wait programs as the safe references."""
+"""Check wait insertion against safe explicit-wait references."""
 
 import contextlib
 from dataclasses import replace
@@ -63,7 +63,7 @@ def run(source, hardware_config_cls, directory, *, dma_scale):
 
 
 def compare_repaired(source, reference, compiler, config_cls, directory, *, dma_scale):
-    # Missing-wait input has no trustworthy asynchronous execution to compare with.
+    # Missing-wait execution is not a valid reference.
     expected = run(reference, config_cls, directory / 'reference', dma_scale=dma_scale)
     optimized = compiler(source, directory)
     actual = run(optimized, config_cls, directory / 'optimized', dma_scale=dma_scale)
@@ -172,8 +172,7 @@ def test_disjoint_channels_and_base_configuration_preserve_dma_queue_order(
     assert result['vmem'][4096:4128] == bytes([0xC3]) * 32
     assert result['vmem'][8192:8224] == bytes([0x97]) * 32
     assert result['dma_base'] == 1
-    # A base-register change is ordered by the DMA queue, so unrelated channels
-    # can all launch before the exit waits rather than serializing transfers.
+    # FIFO-ordered base updates let independent channels launch before exit waits.
     assert optimized.index('dma.config.ch1') < optimized.index('dma.wait.')
 
 

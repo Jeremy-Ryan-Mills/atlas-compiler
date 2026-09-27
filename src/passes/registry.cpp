@@ -1,16 +1,10 @@
 #include <deque>
 #include <stdexcept>
 
+#include "core/dma_flow.h"
 #include "passes/pass.h"
 
 namespace {
-
-// Only a matching wait clears a channel's may-pending bit.
-unsigned dmaAfter(const Instr& in, unsigned pending) {
-    if (in.op->engine != Engine::Dma) return pending;
-    unsigned channel = 1u << in.op->channel;
-    return in.op->opClass == OpClass::DmaWait ? pending & ~channel : pending | channel;
-}
 
 template <typename Fn>
 void visitInstructions(const Block& block, Fn visit) {
@@ -31,37 +25,14 @@ void validateReleaseDma(const Code& code, bool checkPending = true) {
     }
     if (!checkPending || code.blocks.empty()) return;
 
-    // Entry starts idle but must retain pending DMA from backedges.
-    std::vector<unsigned> entry(code.blocks.size(), 0);
-    std::vector<bool> reached(code.blocks.size(), false), queued(code.blocks.size(), false);
-    std::deque<int> work{0};
-    reached[0] = queued[0] = true;
-    while (!work.empty()) {
-        int index = work.front();
-        work.pop_front();
-        queued[index] = false;
-        const Block& block = code.blocks[index];
-        if (block.unknownSuccs)
-            throw std::runtime_error("atlas.release requires known control-flow successors");
-        unsigned pending = entry[index];
-        visitInstructions(block, [&](const Instr& in) { pending = dmaAfter(in, pending); });
-        for (int successor : block.succs) {
-            if (successor < 0 || successor >= (int)code.blocks.size())
-                throw std::runtime_error("atlas.release encountered an invalid control-flow successor");
-            unsigned joined = entry[successor] | pending;
-            if (!reached[successor] || joined != entry[successor]) {
-                reached[successor] = true;
-                entry[successor] = joined;
-                if (!queued[successor]) work.push_back(successor), queued[successor] = true;
-            }
-        }
-    }
-
-    // Wait for convergence to include all joins and backedges.
+    // Share insertion's path analysis; pending transfers still require waits.
+    DmaFlow flow = analyzeDmaFlow(code);
     for (size_t index = 0; index < code.blocks.size(); index++) {
-        if (!reached[index]) continue;
-        unsigned pending = entry[index];
-        visitInstructions(code.blocks[index], [&](const Instr& in) {
+        if (!flow.reached[index]) continue;
+        std::vector<Instr> instructions = blockInstructions(code.blocks[index]);
+        for (size_t i = 0; i < instructions.size(); i++) {
+            const Instr& in = instructions[i];
+            unsigned pending = pendingDmaChannels(flow.before[index][i]);
             // A channel flag cannot count overlapping commands; require idle reuse.
             if (in.op->engine == Engine::Dma && in.op->opClass != OpClass::DmaWait &&
                 (pending & (1u << in.op->channel))) {
@@ -82,8 +53,7 @@ void validateReleaseDma(const Code& code, bool checkPending = true) {
                                          ": atlas.release may publish with pending DMA on " + channels +
                                          "; add matching dma.wait instructions on every reaching path");
             }
-            pending = dmaAfter(in, pending);
-        });
+        }
     }
 }
 

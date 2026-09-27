@@ -35,7 +35,7 @@ def publication_compiler(optimizer):
 
 @pytest.fixture
 def publication_without_dma_insertion(publication_compiler, pytestconfig):
-    """Keep the explicit-wait contract testable when automatic repair is omitted."""
+    """Test manual-wait validation without automatic repair."""
     command = shlex.split(pytestconfig.getoption('atlas_opt') or
                           str(harness.REPO_ROOT / 'build' / 'atlas-opt'))
     command += shlex.split(pytestconfig.getoption('atlas_opt_args'))

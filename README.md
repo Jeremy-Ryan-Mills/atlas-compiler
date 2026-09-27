@@ -39,7 +39,14 @@ Scheduled halts use a NOP guard after delays, including across labels;
 `# keep` preserves the delay immediate. The checker reports unfinished work at
 halt. Robust DMA scheduling reserves remaining port use across waits and gaps.
 
-The default `insert-dma-waits` pass adds matching waits before dependent VMEM accesses, changes to DMA operand registers, channel reuse, marked completion signals, and program exits. It tracks pending commands through branches and loops, preserves existing waits, and leaves independent work free to overlap. Unknown addresses are treated conservatively. Programs must start with no earlier DMA work running.
+The default `insert-dma-waits` pass inserts waits before DMA hazards, channel reuse,
+marked completion signals, and exits, accounting for branches and loops. It preserves
+explicit waits and assumes idle DMA entry. Scheduling overlaps independent work
+with transfers and prioritizes waits that unlock useful work. Timing estimates
+guide placement; actual waits enforce completion. Placement is heuristic.
+
+Custom pipelines using insertion need `schedule`, plus `strip-artifacts` for DMA
+launches in delay slots. Without `insert-dma-waits`, supply required waits manually.
 
 Mark a completion CSR with `# atlas.release`:
 
@@ -48,9 +55,16 @@ vstore m0, 0(x0)
 csrrwi x0, x1, 0xC10 # atlas.release
 ```
 
-Prior fixed-latency work must finish before the CSR executes. Each possibly pending DMA channel needs a matching wait on every path to release and before reuse; the default pipeline inserts missing waits. Releases in delay slots or pipelines without `schedule` are rejected. Preserve the exact, case-sensitive, whitespace-delimited token during preprocessing; printing and reoptimization retain it.
+Prior fixed-latency work must finish before the CSR executes. Each possibly pending
+DMA channel needs a matching wait on every path to release and before reuse.
+Releases in delay slots or pipelines without `schedule` are rejected. Preserve
+the exact, case-sensitive, whitespace-delimited token during preprocessing;
+printing and reoptimization retain it.
 
-Releases assume idle entry; unmarked CSR writes do not signal completion to the compiler. A release provides no host acknowledgment, buffer ownership, or IMEM-slot exit proof. `--check` only checks modeled timing and never inserts waits. A custom pipeline without `insert-dma-waits` must still supply the waits required by annotated releases. Wait insertion requires `schedule`; DMA commands retained in branch delay slots also require `strip-artifacts`.
+Releases assume idle entry; unmarked CSR behavior is unchanged. A release provides
+no host acknowledgment, buffer ownership, or IMEM-slot exit proof.
+`--check` only checks modeled timing and never inserts waits; optimization requires
+matching DMA waits on every path to release.
 
 ## Layout
 
@@ -88,4 +102,5 @@ of `--atlas-opt`.
 `tests/test_regressions.py` covers relocation, both branch paths, halt guards,
 and variable DMA latency. `tests/test_publication*.py` checks data and engine
 state at the expected completion signal, including MXU source reuse, branches,
-loops, and DMA channel reuse. `tests/test_dma_wait_insertion.py` compares automatically repaired programs with explicit-wait references at varied DMA latency. C++ tests check timing, metadata, reservations, wait placement, and repeated optimization.
+loops, and DMA channel reuse. C++ tests check timing, metadata, and reservations.
+`tests/test_dma_wait_*.py` checks insertion and placement against explicit-wait references.

@@ -44,6 +44,7 @@ static void safe(const std::string& source) {
         options.dmaLatencyScale = scale;
         SimResult run = simulate(result, options);
         if (!run.violations.empty()) std::printf("%s\n", run.violations.front().c_str());
+        if (!run.stopReason.empty()) std::printf("%s\n%s\n", run.stopReason.c_str(), source.c_str());
         CHECK(run.violations.empty());
         CHECK(run.stopReason.empty());
     }
@@ -78,6 +79,62 @@ static void dependencies_and_overlap() {
 
     AsmProgram unknown = insert("lw x1, 0(x0)\naddi x7, x0, 32\ndma.load.ch0 x1, x0, x7\nvstore m0, 0(x0)\n");
     CHECK(position(unknown, "dma.wait.ch0") < position(unknown, "vstore"));
+}
+
+static void incoming_dma_overlap() {
+    const std::string launch = "addi x7, x0, 1024\nlui x1, 1\ndma.load.ch0 x1, x0, x7\n";
+    const std::string source = launch + "next:\ndma.wait.ch0\nvstore m0, 0(x0)\nlw x2, 0(x1)\necall\n";
+    AsmProgram result = optimize(source);
+    CHECK(position(result, "vstore") < position(result, "dma.wait.ch0"));
+    CHECK(position(result, "lw") > position(result, "dma.wait.ch0"));
+    CHECK(waits(result) == 1);  // preserve the explicit wait
+    safe(source);
+
+    // Independent channels can launch before waiting.
+    std::string other = launch + "next:\ndma.wait.ch0\ndma.load.ch1 x0, x0, x7\ndma.wait.ch1\necall\n";
+    result = optimize(other);
+    CHECK(position(result, "dma.load.ch1") < position(result, "dma.wait.ch0"));
+    safe(other);
+
+    // Guard incoming data and operands, treating unknown addresses as conflicts.
+    for (const std::string access : {"vstore m0, 0(x0)\n", "addi x7, x0, 0\n"}) {
+        std::string conflict = "addi x7, x0, 1024\ndma.load.ch0 x0, x0, x7\nnext:\ndma.wait.ch0\n" + access + "ecall\n";
+        result = optimize(conflict);
+        CHECK(position(result, "dma.wait.ch0") < (access.starts_with("vstore") ? position(result, "vstore") :
+              position(result, "addi", position(result, "dma.wait.ch0"))));
+        safe(conflict);
+    }
+    result = optimize("lw x1, 0(x0)\naddi x7, x0, 1024\ndma.load.ch0 x1, x0, x7\n"
+                      "next:\ndma.wait.ch0\nvstore m0, 0(x0)\necall\n");
+    CHECK(position(result, "dma.wait.ch0") < position(result, "vstore"));
+
+    for (int taken : {0, 1}) {
+        std::string joined = "addi x7, x0, 1024\nlui x1, 1\naddi x10, x0, " + std::to_string(taken) +
+            "\nbeq x10, x0, alternate\nnop\ndma.load.ch0 x1, x0, x7\njal x0, join\nnop\n"
+            "alternate:\ndma.load.ch0 x0, x0, x7\njoin:\ndma.wait.ch0\nvstore m0, 0(x0)\necall\n";
+        result = optimize(joined);
+        CHECK(position(result, "dma.wait.ch0") < position(result, "vstore"));
+        safe(joined);
+    }
+}
+
+static void ready_wait_unlocks_critical_work() {
+    std::string source = "addi x7, x0, 32\nlui x1, 1\naddi x2, x0, 1024\n"
+                         "dma.load.ch0 x1, x0, x7\ndma.wait.ch0\nvload m6, 0(x2)\n"
+                         "delay 40\nvstore m6, 8(x0)\ndelay 40\n";
+    for (int i = 0; i < 64; i++) source += "addi x9, x9, 1\n";
+    source += "ecall\n";
+    AsmProgram result = optimize(source);
+    CHECK(simulate(result).cycles <= 100);  // Previously 141 cycles.
+    safe(source);
+    // Launch the next DMA before unrelated ALU work.
+    source.insert(source.find("dma.load.ch0"), "dma.config.ch0 x0\nnext:\ndma.wait.ch0\n");
+    result = optimize(source);
+    int firstAlu = 0;
+    while (firstAlu < (int)result.instrs.size() && result.instrs[firstAlu].rd != 9) firstAlu++;
+    CHECK(position(result, "dma.load.ch0") < firstAlu);
+    CHECK(simulate(result).cycles <= 105);
+    safe(source);
 }
 
 static void channels_and_boundaries() {
@@ -142,6 +199,72 @@ static void preserve_explicit_waits() {
     }
 }
 
+static void correlated_branches() {
+    const std::string setup = "addi x7, x0, 32\nlui x1, 1\naddi x10, x0, 0\naddi x11, x0, 3\n";
+    const std::string release = "csrrwi x0, x1, 0xC10 # atlas.release\n";
+    for (const std::string op : {"beq", "bne", "blt", "bge", "bltu", "bgeu"}) {
+        std::string guarded = setup + op + " x10, x11, skip\nnop\ndma.load.ch0 x1, x0, x7\n"
+            "skip:\n" + op + " x10, x11, done\nnop\ndma.wait.ch0\ndone:\n" + release;
+        CHECK(waits(insert(guarded)) == 1);
+        CHECK(waits(optimize(guarded)) == 1);
+        safe(guarded);
+        // Manual waits use the same path proof.
+        Code code = buildBlocks(parseAsm(guarded));
+        PassContext ctx;
+        runPasses(code, {"strip-artifacts", "fill-delay-slots", "schedule"}, ctx);
+        CHECK(waits(flatten(code)) == 1);
+    }
+    // Prefetch reaches the loop-header wait, never the exit.
+    const std::string loop = setup + "dma.load.ch0 x1, x0, x7\nloop:\ndma.wait.ch0\n"
+        "addi x10, x10, 1\nbge x10, x11, skip\nnop\ndma.load.ch0 x1, x0, x7\n"
+        "skip:\nblt x10, x11, loop\nnop\n" + release;
+    CHECK(waits(insert(loop)) == 1);
+    CHECK(waits(optimize(loop)) == 1);
+    safe(loop);
+
+    // Equality is symmetric; signed and unsigned comparisons remain distinct.
+    std::string equal = setup + "beq x10, x11, skip\nnop\ndma.config.ch2 x0\n"
+        "skip:\nbeq x11, x10, done\nnop\ndma.wait.ch2\ndone:\n" + release;
+    CHECK(waits(insert(equal)) == 1);
+    safe(equal);
+    std::string distinct = setup + "blt x10, x11, skip\nnop\ndma.config.ch2 x0\n"
+        "skip:\nbltu x10, x11, done\nnop\ndma.wait.ch2\ndone:\n" + release;
+    CHECK(waits(insert(distinct)) == 2);
+    safe(distinct);
+}
+
+static void invalidate_branch_facts() {
+    const std::string setup = "addi x7, x0, 32\nlui x1, 1\naddi x10, x0, 0\naddi x11, x0, 3\n";
+    const std::string tail = "bge x10, x11, done\nnop\ndma.wait.ch0\ndone:\necall\n";
+    for (const std::string write : {"addi x10, x0, 3\n", "addi x11, x0, 0\n",
+                                    "lw x11, 1024(x0)\n", "csrrwi x11, x0, 0xC10\n"}) {
+        std::string source = setup + "bge x10, x11, skip\nnop\ndma.load.ch0 x1, x0, x7\nskip:\n" + write + tail;
+        CHECK(waits(insert(source)) == 2);
+        // Check placement only for loads/CSRs; the timing simulator cannot evaluate them.
+        CHECK(waits(optimize(source)) == 2);
+        if (write.starts_with("addi")) safe(source);
+    }
+    // Branch on old x10; successors see the slot's update.
+    std::string slot = setup + "bge x10, x11, skip\naddi x10, x0, 3\n"
+        "dma.load.ch0 x1, x0, x7\nskip:\n" + tail;
+    CHECK(waits(insert(slot)) == 2);
+    safe(slot);
+}
+
+static void bounded_branch_analysis() {
+    // Exceed both context and predicate limits; pending DMA must survive widening.
+    std::string source = "dma.config.ch0 x0\n";
+    for (int i = 0; i < 40; i++) {
+        int a = 1 + i / 8, b = 10 + i % 8;
+        std::string label = "join" + std::to_string(i);
+        source += "beq x" + std::to_string(a) + ", x" + std::to_string(b) + ", " + label +
+                  "\nnop\naddi x30, x30, 1\n" + label + ":\n";
+    }
+    source += "ecall\n";
+    CHECK(waits(insert(source)) == 1);
+    safe(source);
+}
+
 static void reject(const std::string& source, const std::vector<std::string>& passes, const std::string& reason) {
     Code code = buildBlocks(parseAsm(source));
     std::string before = printAsm(flatten(code));
@@ -168,9 +291,14 @@ static void preflight() {
 
 int main() {
     dependencies_and_overlap();
+    incoming_dma_overlap();
+    ready_wait_unlocks_critical_work();
     channels_and_boundaries();
     control_flow();
     preserve_explicit_waits();
+    correlated_branches();
+    invalidate_branch_facts();
+    bounded_branch_analysis();
     preflight();
     std::printf("DMA wait insertion: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

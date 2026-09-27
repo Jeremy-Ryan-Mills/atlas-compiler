@@ -34,7 +34,7 @@ bool conflictsAtCompletion(const Footprint& dma, const Footprint& f, EdgeKind& k
     for (const Access& x : dma.accesses) {
         if (!x.atCompletion) continue;
         for (const Access& y : f.accesses) {
-            // The timing model forbids overlapping queued DMA ranges, including stores.
+            // The model forbids queued VMEM overlap, even between stores.
             bool queuedVmem = x.res == Res::Vmem && y.atCompletion;
             if (!overlaps(x, y) || (!x.write && !y.write && !queuedVmem)) continue;
             if (x.res == Res::DmaBase && y.atCompletion) continue;  // the DMA queue keeps these in order
@@ -55,7 +55,7 @@ uint32_t dmaOperandRegisters(const std::vector<Instr>& instrs) {
     return mask & ~1u;
 }
 
-DepGraph buildGraph(const std::vector<Instr>& instrs, const RegValues& entry, uint32_t dmaRegs) {
+DepGraph buildGraph(const std::vector<Instr>& instrs, const RegValues& entry, uint32_t dmaRegs, const IncomingDma* incomingDma) {
     DepGraph g;
     g.nodes = instrs;
     int n = (int)instrs.size();
@@ -91,8 +91,8 @@ DepGraph buildGraph(const std::vector<Instr>& instrs, const RegValues& entry, ui
         }
     }
 
-    // A dma.wait for a transfer started in an earlier block guards data this block can't
-    // see, so later VMEM accesses, DMA commands and writes to DMA operand registers stay behind it.
+    // Guard incoming DMA conflicts and channel reuse; independent work may pass.
+    // Without CFG data, keep the broad memory/register barrier.
     for (int w = 0; w < n; w++) {
         const OpInfo& op = *g.nodes[w].op;
         if (op.opClass != OpClass::DmaWait) continue;
@@ -102,9 +102,17 @@ DepGraph buildGraph(const std::vector<Instr>& instrs, const RegValues& entry, ui
         if (local) continue;
         for (int k = w + 1; k < n; k++) {
             bool guarded = g.nodes[k].op->engine == Engine::Dma && g.nodes[k].op->opClass != OpClass::DmaWait;
-            for (const Access& a : g.footprints[k].accesses) {
-                if (a.res == Res::Vmem) guarded = true;
-                if (a.res == Res::XReg && a.write && (dmaRegs >> a.first & 1)) guarded = true;
+            if (incomingDma) {
+                guarded = guarded && g.nodes[k].op->channel == op.channel;
+                for (const Footprint& dma : (*incomingDma)[op.channel]) {
+                    EdgeKind kind;
+                    guarded |= conflictsAtCompletion(dma, g.footprints[k], kind);
+                }
+            } else {
+                for (const Access& a : g.footprints[k].accesses) {
+                    if (a.res == Res::Vmem) guarded = true;
+                    if (a.res == Res::XReg && a.write && (dmaRegs >> a.first & 1)) guarded = true;
+                }
             }
             if (guarded) edges.add(w, k, 1, EdgeKind::Order, op.name + " guards a transfer started in an earlier block");
         }

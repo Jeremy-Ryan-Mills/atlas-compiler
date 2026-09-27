@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <string>
 #include <vector>
 
@@ -22,13 +23,14 @@ struct DepGraph {
     std::vector<std::vector<int>> in, out;  // edge indices entering / leaving each node
 };
 
-// `dmaRegs` is a bit mask of the x registers that DMA commands anywhere in the
-// program read (they read them when the transfer completes).
-DepGraph buildGraph(const std::vector<Instr>& instrs, const RegValues& entry, uint32_t dmaRegs = 0xFFFFFFFE);
+// Pending transfers per channel, evaluated at their launch sites.
+using IncomingDma = std::array<std::vector<Footprint>, 8>;
+// dmaRegs marks registers read at DMA completion; null incomingDma keeps broad barriers.
+DepGraph buildGraph(const std::vector<Instr>& instrs, const RegValues& entry, uint32_t dmaRegs = 0xFFFFFFFE, const IncomingDma* incomingDma = nullptr);
 
 uint32_t dmaOperandRegisters(const std::vector<Instr>& instrs);
 
-// Conflicts with DMA's completion-time accesses, except FIFO-ordered base updates.
+// DMA completion conflicts, excluding FIFO-ordered base updates.
 bool conflictsAtCompletion(const Footprint& dma, const Footprint& other, EdgeKind& kind);
 
 // Longest path (in cycles) from each node until everything after it has finished.

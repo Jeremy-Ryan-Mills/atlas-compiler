@@ -1,21 +1,19 @@
 #include <algorithm>
-#include <array>
 #include <deque>
-#include <set>
 #include <stdexcept>
 
 #include "core/depgraph.h"
+#include "core/dma_flow.h"
 #include "passes/pass.h"
 
 namespace {
 
-using Pending = std::array<std::set<int>, 8>;
+using Pending = PendingDma;
 
 struct Step {
     Instr in;
     Footprint footprint;
     size_t boundary;
-    int command = -1;
 };
 
 struct Plan {
@@ -23,69 +21,23 @@ struct Plan {
     std::vector<unsigned> waits;
 };
 
-unsigned activeChannels(const Pending& pending) {
-    unsigned mask = 0;
-    for (int channel = 0; channel < 8; channel++)
-        if (!pending[channel].empty()) mask |= 1u << channel;
-    return mask;
-}
-
 void clearChannels(Pending& pending, unsigned mask) {
     for (int channel = 0; channel < 8; channel++)
         if (mask & (1u << channel)) pending[channel].clear();
 }
 
-void advance(Pending& pending, const Step& step) {
-    const OpInfo& op = *step.in.op;
-    if (op.engine != Engine::Dma) return;
-    if (op.opClass == OpClass::DmaWait) pending[op.channel].clear();
-    else pending[op.channel].insert(step.command);
-}
-
-bool joinInto(Pending& into, const Pending& from) {
-    bool changed = false;
-    for (int channel = 0; channel < 8; channel++) {
-        size_t before = into[channel].size();
-        into[channel].insert(from[channel].begin(), from[channel].end());
-        changed |= into[channel].size() != before;
+DmaFlow pendingBefore(const Code& code, const std::vector<Plan>& plans) {
+    DmaWaitPlan waits(code.blocks.size());
+    for (size_t b = 0; b < code.blocks.size(); b++) {
+        waits[b].resize(blockInstructions(code.blocks[b]).size() + 1, 0);
+        std::copy(plans[b].waits.begin(), plans[b].waits.end(), waits[b].begin());
     }
-    return changed;
-}
-
-struct Flow {
-    std::vector<Pending> entry;
-    std::vector<bool> reached;
-};
-
-Flow pendingAtEntry(const Code& code, const std::vector<Plan>& plans) {
-    Flow flow{std::vector<Pending>(code.blocks.size()), std::vector<bool>(code.blocks.size(), false)};
-    std::deque<int> work{0};
-    std::vector<bool> queued(code.blocks.size(), false);
-    flow.reached[0] = queued[0] = true;
-    while (!work.empty()) {
-        int index = work.front();
-        work.pop_front();
-        queued[index] = false;
-        Pending pending = flow.entry[index];
-        for (const Step& step : plans[index].steps) {
-            clearChannels(pending, plans[index].waits[step.boundary]);
-            advance(pending, step);
-        }
-        clearChannels(pending, plans[index].waits.back());
-        for (int successor : code.blocks[index].succs) {
-            bool changed = joinInto(flow.entry[successor], pending);
-            if (!flow.reached[successor] || changed) {
-                flow.reached[successor] = true;
-                if (!queued[successor]) work.push_back(successor), queued[successor] = true;
-            }
-        }
-    }
-    return flow;
+    return analyzeDmaFlow(code, waits);
 }
 
 unsigned requiredWaits(const Pending& pending, const Step& step, const std::vector<Footprint>& commands) {
     const OpInfo& op = *step.in.op;
-    if (step.in.release || op.opClass == OpClass::Halt) return activeChannels(pending);
+    if (step.in.release || op.opClass == OpClass::Halt) return pendingDmaChannels(pending);
     unsigned waits = 0;
     for (int channel = 0; channel < 8; channel++) {
         if (pending[channel].empty()) continue;
@@ -126,7 +78,7 @@ void validateFlow(const Code& code) {
     }
 }
 
-// Give end-label targets and the last branch's fallthrough an actual CFG exit.
+// Add a CFG exit for end labels and final fallthrough.
 void addExit(Code& code) {
     int exit = (int)code.blocks.size();
     for (int index = 0; index < exit; index++) {
@@ -167,7 +119,6 @@ void insertDmaWaits(Code& code, PassContext& ctx) {
         auto addStep = [&](const Instr& in, size_t boundary) {
             Step step{in, footprintOf(in, regs), boundary};
             if (in.op->engine == Engine::Dma && in.op->opClass != OpClass::DmaWait) {
-                step.command = (int)commands.size();
                 commands.push_back(step.footprint);
             }
             plan.steps.push_back(std::move(step));
@@ -178,28 +129,26 @@ void insertDmaWaits(Code& code, PassContext& ctx) {
         if (block.slot) addStep(*block.slot, block.body.size());
     }
 
-    // Each round adds waits, then recomputes reachability with those channel kills.
-    // Command-site sets retain all possible transfers at joins and loop backedges.
-    Flow flow;
+    // Recompute pending DMA with planned waits until no more waits are needed.
+    DmaFlow flow;
     bool changed;
     do {
-        flow = pendingAtEntry(candidate, plans);
+        flow = pendingBefore(candidate, plans);
         changed = false;
         for (size_t index = 0; index < plans.size(); index++) {
             if (!flow.reached[index]) continue;
-            Pending pending = flow.entry[index];
             Plan& plan = plans[index];
-            for (const Step& step : plan.steps) {
+            for (size_t i = 0; i < plan.steps.size(); i++) {
+                const Step& step = plan.steps[i];
+                Pending pending = flow.before[index][i];
                 unsigned& waits = plan.waits[step.boundary];
                 clearChannels(pending, waits);
                 unsigned needed = requiredWaits(pending, step, commands);
                 changed |= (needed & ~waits) != 0;
                 waits |= needed;
-                clearChannels(pending, needed);
-                advance(pending, step);
             }
             if (index == exit) {
-                unsigned needed = activeChannels(pending);
+                unsigned needed = pendingDmaChannels(flow.before[index].back());
                 changed |= (needed & ~plan.waits.back()) != 0;
                 plan.waits.back() |= needed;
             }
@@ -210,17 +159,15 @@ void insertDmaWaits(Code& code, PassContext& ctx) {
     for (size_t index = 0; index < candidate.blocks.size(); index++) {
         if (!flow.reached[index]) continue;
         Block& block = candidate.blocks[index];
-        Pending pending = flow.entry[index];
         std::vector<Instr> body;
         size_t current = 0;
         auto emitWaits = [&](size_t boundary) {
-            unsigned needed = plans[index].waits[boundary] & activeChannels(pending);
+            unsigned needed = plans[index].waits[boundary] & pendingDmaChannels(flow.before[index][boundary]);
             for (int channel = 0; channel < 8; channel++) {
                 if (!(needed & (1u << channel))) continue;
                 body.push_back(makeInstr("dma.wait.ch" + std::to_string(channel)));
                 inserted++;
             }
-            clearChannels(pending, needed);
         };
         for (const Step& step : plans[index].steps) {
             if (current <= step.boundary) {
@@ -228,7 +175,6 @@ void insertDmaWaits(Code& code, PassContext& ctx) {
                 current = step.boundary + 1;
             }
             if (step.boundary < block.body.size()) body.push_back(step.in);
-            advance(pending, step);
         }
         if (current <= block.body.size()) emitWaits(block.body.size());
         block.body = std::move(body);
