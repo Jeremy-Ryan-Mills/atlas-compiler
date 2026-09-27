@@ -4,11 +4,16 @@
 #include <vector>
 
 #include "core/blocks.h"
+#include "core/machine.h"
+
+enum class SchedulePriority { Critical, Input };
 
 // Settings and results shared by the passes of one run.
 struct PassContext {
     bool robustDma = true;         // never assume when a dma.wait releases (.agents/OPEN_QUESTIONS.md #1)
     std::vector<std::string> log;  // each pass adds a line describing what it did
+    MachineModel model;
+    SchedulePriority schedulePriority = SchedulePriority::Critical;
 };
 
 // A pass rewrites the blocks of a program in place. See src/passes/README.md.

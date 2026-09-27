@@ -14,6 +14,20 @@ const int kVmemBankBytes = 256 * 1024;
 const int kVmemBanks = kVmemBytes / kVmemBankBytes;
 const int kLineBytes = 32;
 
+// Optional partial RTL profile; every other rule remains the built-in model.
+// Defaults retain the existing npu_model behavior. Experimental profiles require
+// separate RTL validation for the selected configuration and kernel.
+struct MachineModel {
+    int mxu1FirstWriteAge = 3;
+    bool mxu1OverwriteAccReadHold = true;
+    bool mxu0OverwriteAccReadHold = true;
+    std::string sourceIrSha256;
+    std::string name = "npu_model/rtl-match";
+};
+
+MachineModel readExperimentalMxu1Profile(const std::string& path, const MachineModel& base = {});
+MachineModel readExperimentalMxu0Profile(const std::string& path, const MachineModel& base = {});
+
 // Storage an instruction reads or writes.
 enum class Res { XReg, EReg, MReg, Acc, Weight, Vmem, DmaBase };
 
@@ -67,7 +81,7 @@ struct Footprint {
     std::string error;                        // set when the operands are illegal
 };
 
-Footprint footprintOf(const Instr& in, const RegValues& regs);
+Footprint footprintOf(const Instr& in, const RegValues& regs, const MachineModel& model = {});
 
 enum class EdgeKind { RAW, WAR, WAW, Rule, Order };
 const char* edgeKindName(EdgeKind k);

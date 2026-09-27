@@ -53,13 +53,13 @@ uint32_t dmaOperandRegisters(const std::vector<Instr>& instrs) {
     return mask & ~1u;
 }
 
-DepGraph buildGraph(const std::vector<Instr>& instrs, const RegValues& entry, uint32_t dmaRegs) {
+DepGraph buildGraph(const std::vector<Instr>& instrs, const RegValues& entry, uint32_t dmaRegs, const MachineModel& model) {
     DepGraph g;
     g.nodes = instrs;
     int n = (int)instrs.size();
     RegValues regs = entry;
     for (const Instr& in : instrs) {
-        g.footprints.push_back(footprintOf(in, regs));
+        g.footprints.push_back(footprintOf(in, regs, model));
         applyScalar(in, regs);
     }
 

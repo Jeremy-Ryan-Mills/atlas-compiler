@@ -30,7 +30,7 @@ struct ProgramView {
 // Builds the before/after graphs of every block. `optimized` must have the same
 // blocks as `original` (the passes keep the block structure).
 ProgramView buildProgramView(const std::string& source, const AsmProgram& original, const Code& optimized,
-                             const SimResult& before, const SimResult& after);
+                             const SimResult& before, const SimResult& after, const MachineModel& model = {});
 
 // Self-contained HTML page showing each block's dependency graph before and after
 // optimization, with every instruction placed at the cycle it issues.

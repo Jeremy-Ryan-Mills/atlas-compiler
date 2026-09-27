@@ -2,9 +2,9 @@
 
 `atlas-opt` reads Atlas NPU assembly, builds a dependency graph for every basic
 block, and reschedules the code so the engines overlap while every dependence and
-hardware rule of npu_model's `rtl-match` branch still holds. It then writes the new
-program with the minimum `delay`s. [PLAN.md](.agents/PLAN.md) has the design and roadmap;
-[OPEN_QUESTIONS.md](.agents/OPEN_QUESTIONS.md) lists what waits until the model is
+modeled hardware rule of npu_model's `rtl-match` branch still holds. It then writes the
+scheduled program with explicit `delay`s. [PLAN.md](.agents/notes/PLAN.md) has the design and roadmap;
+[OPEN_QUESTIONS.md](.agents/notes/OPEN_QUESTIONS.md) lists what waits until the model is
 confirmed RTL accurate.
 
 ```sh
@@ -13,7 +13,18 @@ cmake -S . -B build -G Ninja && cmake --build build
 build/atlas-opt kernel.S -o kernel.opt.S --viz kernel.html
 ```
 
-Initialize `third_party/atlas-npu` separately for RTL reference.
+The [RTL extraction plan](.agents/notes/RTL_GRAPH_PLAN.md),
+[kernel replay results](docs/rtlgraph-kernels.md), and
+[experimental MXU1 profile](docs/rtlgraph-profile.md) describe the optional
+`EE290SimConfig` hardware-evidence flow. It uses the enclosing Atlas checkout;
+`third_party/atlas-npu` is not a registered submodule.
+The [bank experiments](docs/rtlgraph-banks.md) check CIRCT address mapping,
+physical-port conflicts, and compiler repair with controlled RTL witnesses.
+The [fixed-operation search](docs/rtlgraph-search.md) bounds K64/K128 under the
+current model; [fused attention](docs/rtlgraph-attention.md) demonstrates a measured
+29.7% compute-window improvement over handwritten assembly with matching outputs.
+
+The [MXU0 projection](docs/rtlgraph-mxu0.md) independently extracts overwrite accumulator-read behavior; [VPU evidence](docs/rtlgraph-vpu.md) checks issue/resource guards. The [corpus scheduling guide](docs/rtlgraph-corpus-scheduling.md) describes the broader paired experiments and their validation boundaries.
 
 | Option | What it does |
 |---|---|
@@ -22,6 +33,9 @@ Initialize `third_party/atlas-npu` separately for RTL reference.
 | `--passes a,b,c` / `--list-passes` | run only some passes / list them |
 | `--check` | only simulate the input: cycle count and any broken timing rules |
 | `--dma-timing model` | trust npu_model's DMA latency instead of staying valid for any latency |
+| `--schedule-priority critical\|input` | choose critical-path priority (default) or input order among ready, resource-legal instructions |
+| `--experimental-mxu1-profile FILE` | load the optional partial MXU1 timing/resource projection; other rules remain built in |
+| `--experimental-mxu0-profile FILE` | load the optional MXU0 accumulator-read projection; may compose with an MXU1 profile from the same hardware IR |
 
 After optimizing, atlas-opt simulates the result (at npu_model's DMA speed and with
 slower DMA) and exits with an error if any timing rule is broken. The viewer shows

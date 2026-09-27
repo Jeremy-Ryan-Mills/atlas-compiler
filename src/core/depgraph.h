@@ -24,7 +24,8 @@ struct DepGraph {
 
 // `dmaRegs` is a bit mask of the x registers that DMA commands anywhere in the
 // program read (they read them when the transfer completes).
-DepGraph buildGraph(const std::vector<Instr>& instrs, const RegValues& entry, uint32_t dmaRegs = 0xFFFFFFFE);
+DepGraph buildGraph(const std::vector<Instr>& instrs, const RegValues& entry, uint32_t dmaRegs = 0xFFFFFFFE,
+                    const MachineModel& model = {});
 
 uint32_t dmaOperandRegisters(const std::vector<Instr>& instrs);
 

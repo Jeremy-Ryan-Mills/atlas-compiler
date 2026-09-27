@@ -15,13 +15,13 @@ static std::runtime_error scheduleError(const Instr& in, const std::string& why)
 
 // Reorders and times one block. The block may assume an idle machine on entry and
 // drains (everything it started finishes) before its successors begin.
-static void scheduleBlock(Block& block, const RegValues& entry, bool robustDma, bool lastBlock, bool fallthroughHalt, uint32_t dmaRegs) {
+static void scheduleBlock(Block& block, const RegValues& entry, bool robustDma, bool lastBlock, bool fallthroughHalt, uint32_t dmaRegs, const MachineModel& model, SchedulePriority priority) {
     std::vector<Instr> nodes = blockInstructions(block);
     int nb = (int)block.body.size(), n = (int)nodes.size();
     int term = block.terminator ? nb : -1;
     int slot = hasDelaySlot(block) ? nb + 1 : -1;
 
-    DepGraph g = buildGraph(nodes, entry, dmaRegs);
+    DepGraph g = buildGraph(nodes, entry, dmaRegs, model);
     for (int i = 0; i < n; i++) {
         if (!g.footprints[i].error.empty()) throw scheduleError(nodes[i], g.footprints[i].error);
         std::string alone = ReservationTable().conflict(nodes[i], g.footprints[i], 0);
@@ -43,7 +43,9 @@ static void scheduleBlock(Block& block, const RegValues& entry, bool robustDma, 
     ReservationTable table;
     int cycle = 0, placed = 0, nextFree = 0, lastPlaced = 0, lastBody = -1;
     while (placed < nb) {
-        // Among ready instructions that fit this cycle, take the one on the longest path.
+        // Rank ready, resource-legal work by critical height (the default), or
+        // preserve input priority. Input priority skips blocked instructions;
+        // it does not bypass dependencies or resource reservations.
         int best = -1, bestWait = -1;
         bool otherWork = false;
         for (int i = 0; i < nb; i++) {
@@ -55,7 +57,7 @@ static void scheduleBlock(Block& block, const RegValues& entry, bool robustDma, 
                 if (bestWait < 0 || release(i) < release(bestWait)) bestWait = i;
                 continue;
             }
-            if (best >= 0 && height[i] <= height[best]) continue;  // ties keep program order
+            if (best >= 0 && (priority == SchedulePriority::Input || height[i] <= height[best])) continue;
             if (!table.conflict(nodes[i], g.footprints[i], cycle).empty()) continue;
             best = i;
         }
@@ -144,11 +146,13 @@ void schedule(Code& code, PassContext& ctx) {
             while (next < code.blocks.size() && code.blocks[next].body.empty() && !code.blocks[next].terminator) next++;
             bool fallthroughHalt = next < code.blocks.size() && code.blocks[next].body.empty() &&
                                    code.blocks[next].terminator && code.blocks[next].terminator->op->opClass == OpClass::Halt;
-            scheduleBlock(code.blocks[bi], entry[bi], ctx.robustDma, lastBlock, fallthroughHalt, dmaRegs);
+            scheduleBlock(code.blocks[bi], entry[bi], ctx.robustDma, lastBlock, fallthroughHalt, dmaRegs, ctx.model, ctx.schedulePriority);
         } catch (const std::runtime_error& e) {
             throw std::runtime_error("block " + std::to_string(bi) + ": " + e.what());
         }
     }
     ctx.log.push_back(std::string("schedule: list-scheduled ") + std::to_string(code.blocks.size()) + " blocks (" +
                       (ctx.robustDma ? "robust" : "npu_model") + " DMA timing)");
+    if (ctx.schedulePriority == SchedulePriority::Input)
+        ctx.log.push_back("schedule: input-order priority among ready instructions; DMA-wait policy unchanged");
 }

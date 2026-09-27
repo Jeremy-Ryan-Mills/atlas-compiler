@@ -7,7 +7,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).absolute().parents[1]))
-from rtlgraph_mxu1_trace import TraceError, check_trace
+from rtlgraph_mxu1_trace import TraceError, check_trace, decode_mxu1
 
 
 HEADER = {"schema_version": 1, "kind": "atlas-mxu1-cycle-trace",
@@ -58,6 +58,49 @@ def witness(op="Matmul", count=1, latency=2, push=False):
         samples[cycle]["mreg_resp_valid"] = response
         samples[cycle]["mreg_resp_count"] = int(response)
         samples[cycle]["mreg_resp_banks"] = [samples[cycle - 1]["mreg_req"]["mreg"] & 31] if response else []
+    return samples
+
+
+PERF_HEADER = {**HEADER, "perf_capture": "mxu1_scalar_issue_push_pop_v1"}
+
+
+def encoded(command):
+    kinds = ("PushWeight", "PushAccFP8", "PushAccBF16", "PopAccFP8", "PopAccBF16", "Matmul", "MatmulAcc")
+    op = command["op"]
+    if op.startswith("Pop"):
+        vd, vs1, vs2 = command["mreg"], 0, command["accsel"]
+    elif op == "PushWeight":
+        vd, vs1, vs2 = command["wslot"], command["mreg"], 0
+    else:
+        vd, vs1, vs2 = command["accsel"], command["mreg"], command["wslot"]
+    return ((2 * kinds.index(op) + 1) << 25) | (vs2 << 19) | (vs1 << 13) | (vd << 7) | 0x77
+
+
+def add_scalar_issue(sample):
+    command = sample["cmd"]
+    sample["scalar"] = {"fire": True, "pc": sample["cycle"], "instr": encoded(command)}
+
+
+def perf_witness(op="Matmul", count=2):
+    samples = witness(op=op, count=count, push=True)
+    pop_cycle = 33 + (count - 1) * 32 + 4
+    while len(samples) <= pop_cycle + 33:
+        samples.append(idle(len(samples)))
+    for sample in samples[1:]:
+        sample.update(scalar={"fire": False}, csr={"valid": False},
+                      accept={key: False for key in ("push_p0", "push_p1", "bf16_push", "pop_fp8", "pop_bf16")},
+                      weight_write={"valid": False}, acc_store={"valid": False}, mreg_write={"valid": False})
+    samples[1]["cmd"].update(mreg=9, accsel=0, wslot=0)
+    samples[1]["accept"]["push_p0"] = True
+    for row in range(32):
+        samples[2 + row]["weight_write"] = {"valid": True, "wslot": 0, "row": row}
+        samples[pop_cycle + row]["acc_store"] = {"valid": True, "accsel": (count - 1) % 2, "row": row}
+        samples[pop_cycle + row + 1]["mreg_write"] = {"valid": True, "mreg": 10, "row": row}
+    samples[pop_cycle]["cmd"] = {"valid": True, "op": "PopAccFP8", "mreg": 10, "accsel": (count - 1) % 2, "wslot": 0}
+    samples[pop_cycle]["accept"]["pop_fp8"] = True
+    for sample in samples[1:]:
+        if sample["cmd"]["valid"]:
+            add_scalar_issue(sample)
     return samples
 
 
@@ -208,6 +251,80 @@ class TraceTest(unittest.TestCase):
             header[key] = value
             with self.subTest(key=key), self.assertRaises(TraceError):
                 check_trace(header, witness())
+
+
+class PerfTraceTest(unittest.TestCase):
+    def rejected(self, samples, message):
+        with self.assertRaisesRegex(TraceError, message):
+            check_trace(PERF_HEADER, samples)
+
+    def test_scalar_alignment_back_to_back_compute_and_overlapping_pop(self):
+        report = check_trace(PERF_HEADER, perf_witness(op="MatmulAcc"))
+        self.assertEqual([t["issue_to_accept_gap"] for t in report["transactions"]], [0, 0])
+        self.assertEqual(report["transactions"][1]["scalar_relative"]["writes"]["first_age"], 3)
+        self.assertEqual(len(report["perf"]["mxu1_commands"]), 4)
+        self.assertEqual(report["perf"]["pushes"][0]["writes"]["ages"], list(range(1, 33)))
+        self.assertEqual(report["perf"]["pops"][0]["reads"]["ages"], list(range(32)))
+        self.assertEqual(report["perf"]["pops"][0]["writes"]["ages"], list(range(1, 33)))
+
+    def test_concurrent_p1_push_does_not_replace_compute_p0_requests(self):
+        samples = perf_witness(count=1)
+        cycle = 34
+        samples[cycle]["cmd"] = {"valid": True, "op": "PushWeight", "mreg": 12, "accsel": 1, "wslot": 1}
+        samples[cycle]["accept"]["push_p1"] = True
+        add_scalar_issue(samples[cycle])
+        for row in range(32):
+            samples[cycle + row + 1]["weight_write"] = {"valid": True, "wslot": 1, "row": row}
+        report = check_trace(PERF_HEADER, samples)
+        self.assertEqual(len(report["perf"]["pushes"]), 2)
+        self.assertEqual(report["transactions"][0]["requests"]["ages"], list(range(32)))
+
+    def test_unmatched_scalar_issue_and_changed_operands_fail(self):
+        samples = perf_witness()
+        samples[33]["scalar"]["fire"] = False
+        self.rejected(samples, "instruction and command-valid are unmatched")
+        samples = perf_witness()
+        samples[33]["scalar"]["instr"] ^= 1 << 13
+        self.rejected(samples, "operands disagree")
+
+    def test_unknown_scalar_instruction_fails(self):
+        samples = perf_witness()
+        samples[33]["scalar"]["instr"] = None
+        self.rejected(samples, "unknown/non-integer")
+
+    def test_rejected_push_and_missing_weight_rows_fail(self):
+        samples = perf_witness()
+        samples[1]["accept"]["push_p0"] = False
+        self.rejected(samples, "rejected or multiply accepted")
+        samples = perf_witness()
+        samples[3]["weight_write"]["row"] = 0
+        self.rejected(samples, "weight push rows")
+
+    def test_pop_destination_and_read_address_are_checked(self):
+        samples = perf_witness()
+        samples[70]["mreg_write"]["mreg"] = 11
+        self.rejected(samples, "pop writes wrong mreg")
+        samples = perf_witness()
+        samples[69]["acc_store"]["row"] = 1
+        self.rejected(samples, "pop read row order")
+
+    def test_truncated_pop_does_not_pass_after_compute_drains(self):
+        samples = perf_witness()
+        self.rejected(samples[:-2], "accepted push/pop rows have not drained")
+
+    def test_csr_events_retain_scalar_identity(self):
+        samples = perf_witness()
+        sample = samples[-1]
+        instruction = (0xC00 << 20) | (2 << 12) | (20 << 7) | 0x73
+        sample["scalar"] = {"fire": True, "pc": 123, "instr": instruction}
+        sample["csr"] = {"valid": True, "addr": 0xC00, "cmd": 2, "wdata": 0, "rdata": 512}
+        report = check_trace(PERF_HEADER, samples)
+        self.assertEqual(report["perf"]["csr_events"][0]["pc"], 123)
+        self.assertEqual(report["perf"]["csr_events"][0]["rdata"], 512)
+
+    def test_reserved_mxu1_encoding_is_unsupported(self):
+        with self.assertRaisesRegex(TraceError, "unsupported issued MXU1"):
+            decode_mxu1((15 << 25) | 0x77)
 
 
 if __name__ == "__main__":

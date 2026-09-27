@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).absolute().parents[1]))
-from rtlgraph_mxu1_vcd import (SIGNALS, convert, edge_samples, read_header,
+from rtlgraph_mxu1_vcd import (BANK_SIGNALS, PERF_SIGNALS, SIGNALS, convert, edge_samples, read_header,
                                 sample_record, value_changes)
 
 
@@ -80,6 +80,17 @@ class VcdTests(unittest.TestCase):
         flat['bank.9.valid'] = 1
         self.assertIsNone(sample_record(0, 0, flat)['mreg_resp_count'])
 
+    def test_perf_map_preserves_original_and_emits_scalar_word(self):
+        self.assertTrue(all(PERF_SIGNALS[key] == value for key, value in SIGNALS.items()))
+        flat = {key: 0 for key in PERF_SIGNALS}
+        flat.update({'scalar.fire': 1, 'scalar.pc': 42, 'scalar.instr': 0x16000077,
+                     'accept.push_p1': 1, 'weight_write.row': 9})
+        sample = sample_record(0, 1000, flat, perf=True)
+        self.assertEqual(sample['scalar'], {'fire': 1, 'pc': 42, 'instr': 0x16000077})
+        self.assertEqual(sample['accept']['push_p1'], 1)
+        self.assertEqual(sample['weight_write']['row'], 9)
+        self.assertNotIn('scalar', sample_record(0, 1000, flat))
+
     def test_failed_conversion_does_not_publish_partial_trace(self):
         with tempfile.TemporaryDirectory() as directory:
             source, output = Path(directory)/'input.vcd', Path(directory)/'trace.jsonl'
@@ -88,6 +99,22 @@ class VcdTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "No sequencer rising"):
                     convert(source, output)
             self.assertFalse(output.exists())
+
+    def test_bank_mode_preserves_perf_and_samples_actual_requests_and_routes(self):
+        self.assertTrue(all(BANK_SIGNALS[key] == value for key, value in PERF_SIGNALS.items()))
+        self.assertEqual(len(BANK_SIGNALS) - len(PERF_SIGNALS), 6)
+        flat = {key: 0 for key in BANK_SIGNALS}
+        flat.update({'bank_read.p0.valid': 1, 'bank_read.p0.mreg': 0, 'bank_read.p0.row': 31,
+                     'bank_read.p1.valid': 1, 'bank_read.p1.mreg': 32, 'bank_read.p1.row': 0,
+                     'bank.9.valid': 1, 'bank.9.port': 3})
+        sample = sample_record(0, 1000, flat, banks=True)
+        self.assertEqual(sample['bank_reads']['p1'], {'valid': 1, 'mreg': 32, 'row': 0})
+        self.assertEqual(sample['p1_resp_banks'], [9])
+        self.assertEqual(sample['mreg_resp_banks'], [])
+        self.assertIn('scalar', sample)
+        self.assertNotIn('bank_reads', sample_record(0, 1000, flat, perf=True))
+        flat['bank.9.port'] = None
+        self.assertIsNone(sample_record(0, 1000, flat, banks=True)['p1_resp_banks'])
 
 
 if __name__ == '__main__':

@@ -47,7 +47,7 @@ static bool isScheduleArtifact(const Instr& in) {
 }
 
 static GraphView makeView(const std::vector<Instr>& seq, const std::vector<int>& seqCycles,
-                          const RegValues& entry, int length, uint32_t dmaRegs) {
+                          const RegValues& entry, int length, uint32_t dmaRegs, const MachineModel& model) {
     GraphView v;
     std::vector<Instr> nodes;
     for (size_t i = 0; i < seq.size(); i++) {
@@ -55,14 +55,14 @@ static GraphView makeView(const std::vector<Instr>& seq, const std::vector<int>&
         nodes.push_back(seq[i]);
         v.cycles.push_back(seqCycles[i]);
     }
-    v.graph = buildGraph(nodes, entry, dmaRegs);
+    v.graph = buildGraph(nodes, entry, dmaRegs, model);
     v.redundant = redundantEdges(v.graph);
     v.length = length;
     return v;
 }
 
 ProgramView buildProgramView(const std::string& source, const AsmProgram& original, const Code& optimized,
-                             const SimResult& before, const SimResult& after) {
+                             const SimResult& before, const SimResult& after, const MachineModel& model) {
     ProgramView view;
     view.source = source;
     view.before = before;
@@ -81,7 +81,7 @@ ProgramView buildProgramView(const std::string& source, const AsmProgram& origin
         std::vector<Instr> seq = blockInstructions(ob);
         std::vector<int> cycles = asWrittenCycles(seq);
         int length = seq.empty() ? 0 : cycles.back() + naturalGap(seq.back());
-        bv.before = makeView(seq, cycles, entryOrig[bi], length, dmaRegs);
+        bv.before = makeView(seq, cycles, entryOrig[bi], length, dmaRegs, model);
         bv.lowerBound = criticalPathLength(bv.before.graph);
 
         const Block& nb = optimized.blocks[bi];
@@ -93,7 +93,7 @@ ProgramView buildProgramView(const std::string& source, const AsmProgram& origin
             if (hasDelaySlot(nb)) cycles2.push_back(nb.terminatorCycle + 1);
         }
         length = nb.scheduled ? nb.endCycle : seq2.empty() ? 0 : cycles2.back() + naturalGap(seq2.back());
-        bv.after = makeView(seq2, cycles2, entryOpt[bi], length, dmaRegs);
+        bv.after = makeView(seq2, cycles2, entryOpt[bi], length, dmaRegs, model);
         view.blocks.push_back(bv);
     }
     return view;

@@ -4,11 +4,13 @@
 #include <vector>
 
 #include "core/asm.h"
+#include "core/machine.h"
 
 struct SimOptions {
     long long maxCycles = 50000000;
     double dmaLatencyScale = 1.0;  // > 1 stretches every DMA transfer, to test robustness
     int maxViolations = 20;
+    MachineModel model;
 };
 
 struct SimResult {

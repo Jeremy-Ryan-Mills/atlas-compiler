@@ -148,7 +148,7 @@ void scalarRegs(Builder& b, const Instr& in) {
 
 }  // namespace
 
-Footprint footprintOf(const Instr& in, const RegValues& regs) {
+Footprint footprintOf(const Instr& in, const RegValues& regs, const MachineModel& model) {
     Builder b;
     const OpInfo& op = *in.op;
     if (in.release && op.opClass != OpClass::Csr) {
@@ -156,7 +156,7 @@ Footprint footprintOf(const Instr& in, const RegValues& regs) {
         return b.f;
     }
     int mxu = op.mxu;
-    int cf = mxu == 0 ? 63 : 3;  // age of the first accumulator row written by a matmul
+    int cf = mxu == 0 ? 63 : model.mxu1FirstWriteAge;
 
     switch (op.opClass) {
         case OpClass::Alu:
@@ -272,7 +272,9 @@ Footprint footprintOf(const Instr& in, const RegValues& regs) {
             b.f.readRelease = b.f.writeRelease = 32;
             b.hold(Unit::MxuPort, mxu * 4 + 0, 0, 31);
             b.hold(Unit::MxuCompute, mxu, 0, cf + 31);
-            b.hold(Unit::MxuAccRead, mxu * 2 + in.rd, 0, 31);
+            if (op.opClass == OpClass::MatMulAcc ||
+                (mxu == 1 ? model.mxu1OverwriteAccReadHold : model.mxu0OverwriteAccReadHold))
+                b.hold(Unit::MxuAccRead, mxu * 2 + in.rd, 0, 31);
             b.hold(Unit::MxuAccWrite, mxu * 2 + in.rd, cf, cf + 31);
             break;
 
@@ -499,8 +501,12 @@ Dependence dependence(const Instr& a, const Footprint& fa, const Instr& b, const
             return -1;
         };
         bool bWeight = B.opClass == OpClass::WeightPush;
-        if (isCompute(A) && !bWeight && accOf(a) == accOf(b))
-            consider(m == 0 ? 64 : 4, EdgeKind::Rule, mx + "wait until row 0 of the matmul on acc" + std::to_string(accOf(a)) + " is written");
+        if (isCompute(A) && !bWeight && accOf(a) == accOf(b)) {
+            int firstWrite = 0;
+            for (const Access& access : fa.accesses)
+                if (access.res == Res::Acc && access.write) firstWrite = std::max(firstWrite, access.age);
+            consider(firstWrite + 1, EdgeKind::Rule, mx + "wait until row 0 of the matmul on acc" + std::to_string(accOf(a)) + " is written");
+        }
         if (m == 0 && isCompute(A) && bWeight && slotOf(a) == slotOf(b))
             consider(63, EdgeKind::Rule, mx + "weight slot still feeding the systolic array");
         if (m == 1) {

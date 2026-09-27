@@ -86,6 +86,131 @@ def series(cycles, accepted):
             "steps": steps, "uniform_step": steps[0] if steps and len(set(steps)) == 1 else None}
 
 
+def decode_mxu1(instruction):
+    """Pinned Instructions.scala:100-113 and ScalarCore.scala:173-190 fields.
+
+    This decodes issued words independently of the observed sequencer command.
+    A different target encoding requires an explicit adapter, never a guess.
+    """
+    require(0 <= instruction < (1 << 32), "scalar instruction exceeds 32 bits")
+    funct7 = instruction >> 25
+    if instruction & 0x7f != 0x77 or not funct7 & 1:
+        return None
+    kinds = ("PushWeight", "PushAccFP8", "PushAccBF16", "PopAccFP8", "PopAccBF16", "Matmul", "MatmulAcc")
+    require(funct7 // 2 < len(kinds), "unsupported issued MXU1 encoding")
+    op = kinds[funct7 // 2]
+    vd, vs1, vs2 = (instruction >> 7) & 63, (instruction >> 13) & 63, (instruction >> 19) & 63
+    command = {"op": op, "mreg": vs1, "accsel": vd & 1, "wslot": vd & 1}
+    if op in COMPUTE_OPS:
+        command["wslot"] = vs2 & 1
+    elif op in ("PopAccFP8", "PopAccBF16"):
+        command.update(mreg=vd, accsel=vs2 & 1)
+    return command
+
+
+class PerfEvents:
+    """Optional scalar alignment plus independent weight-push/FP8-pop row queues."""
+    def __init__(self):
+        self.issues, self.commands, self.pushes, self.pops, self.csr_events = [], [], [], [], []
+        self.pending_push, self.pending_pop = deque(), deque()
+        self.previous_store = None
+
+    def reset(self):
+        require(not self.pending_push and not self.pending_pop and self.previous_store is None,
+                "reset interrupted an accepted push/pop")
+
+    def observe(self, sample, cycle):
+        fire = flag(sample, "scalar.fire")
+        issue, decoded = None, None
+        if fire:
+            issue = {"cycle": cycle, "pc": integer(sample, "scalar.pc"),
+                     "instruction": integer(sample, "scalar.instr")}
+            decoded = decode_mxu1(issue["instruction"])
+            self.issues.append(issue)
+        command_valid = flag(sample, "cmd.valid")
+        require(command_valid == (decoded is not None), "issued MXU1 instruction and command-valid are unmatched")
+        accepted = {name: flag(sample, "accept." + name) for name in
+                    ("push_p0", "push_p1", "bf16_push", "pop_fp8", "pop_bf16")}
+        accepted["compute"] = flag(sample, "accept_compute")
+        require(sum(accepted.values()) == int(command_valid), "issued command was rejected or multiply accepted")
+        if command_valid:
+            require(metadata(sample, "cmd") == decoded, "issued MXU1 operands disagree with sequencer command")
+            require(decoded["op"] in COMPUTE_OPS | {"PushWeight", "PopAccFP8"},
+                    "unsupported perf instruction family; only compute, weight push and FP8 pop are checked")
+            event = {**issue, "command": decoded,
+                     "accept_kind": next(name for name, value in accepted.items() if value)}
+            self.commands.append(event)
+            if decoded["op"] in COMPUTE_OPS:
+                require(accepted["compute"], "compute command accepted by the wrong engine path")
+            elif decoded["op"] == "PushWeight":
+                require(accepted["push_p0"] or accepted["push_p1"], "weight push accepted by the wrong path")
+                transaction = {**event, "write_cycles": []}
+                self.pushes.append(transaction)
+                self.pending_push.append(transaction)
+            else:
+                require(accepted["pop_fp8"], "FP8 pop accepted by the wrong path")
+                transaction = {**event, "read_cycles": [], "write_cycles": []}
+                self.pops.append(transaction)
+                self.pending_pop.append(transaction)
+
+        if flag(sample, "weight_write.valid"):
+            require(bool(self.pending_push), "weight write without an accepted push")
+            push = self.pending_push[0]
+            row = len(push["write_cycles"])
+            require(integer(sample, "weight_write.wslot") == push["command"]["wslot"], "weight write targets wrong slot")
+            require(integer(sample, "weight_write.row") == row and row < 32, "weight push rows are missing, repeated or reordered")
+            push["write_cycles"].append(cycle)
+            if row == 31:
+                self.pending_push.popleft()
+
+        # Pop's synchronous accumulator read is tagged from observed requests;
+        # the previous request, not current acceptance, identifies each write.
+        mreg_write = flag(sample, "mreg_write.valid")
+        require(mreg_write == (self.previous_store is not None), "FP8 pop read/write valid alignment mismatch")
+        if mreg_write:
+            pop, row = self.previous_store
+            require(integer(sample, "mreg_write.mreg") == pop["command"]["mreg"], "FP8 pop writes wrong mreg")
+            require(integer(sample, "mreg_write.row") == row == len(pop["write_cycles"]), "FP8 pop write row order mismatch")
+            pop["write_cycles"].append(cycle)
+            if row == 31:
+                require(bool(self.pending_pop) and self.pending_pop[0] is pop, "FP8 pop completion order mismatch")
+                self.pending_pop.popleft()
+        self.previous_store = None
+        if flag(sample, "acc_store.valid"):
+            pending = [pop for pop in self.pending_pop if len(pop["read_cycles"]) < 32]
+            require(bool(pending), "accumulator store read without an accepted FP8 pop")
+            pop = pending[0]
+            row = len(pop["read_cycles"])
+            require(integer(sample, "acc_store.accsel") == pop["command"]["accsel"], "FP8 pop reads wrong accumulator")
+            require(integer(sample, "acc_store.row") == row, "FP8 pop read row order mismatch")
+            pop["read_cycles"].append(cycle)
+            self.previous_store = (pop, row)
+
+        csr_valid = flag(sample, "csr.valid")
+        csr_instruction = fire and issue["instruction"] & 0x7f == 0x73 and (issue["instruction"] >> 12) & 7 in (1, 2, 3, 5, 6, 7)
+        require(csr_valid == bool(csr_instruction), "scalar CSR instruction and CSR port are unmatched")
+        if csr_valid:
+            csr = {name: integer(sample, "csr." + name) for name in ("addr", "cmd", "wdata", "rdata")}
+            require(csr["addr"] == issue["instruction"] >> 20, "CSR address disagrees with issued instruction")
+            self.csr_events.append({**issue, **csr})
+        return issue if decoded is not None else None
+
+    def finish(self):
+        require(not self.pending_push and not self.pending_pop and self.previous_store is None,
+                "truncated capture: accepted push/pop rows have not drained")
+        return {"status": "scalar_issue_and_engine_events_matched", "scalar_issues": self.issues,
+                "mxu1_commands": self.commands, "csr_events": self.csr_events,
+                "pushes": [{"scalar_issue": {key: push[key] for key in ("cycle", "pc", "instruction")},
+                            "command": push["command"], "accept_kind": push["accept_kind"],
+                            "writes": series(push["write_cycles"], push["cycle"])} for push in self.pushes],
+                "pops": [{"scalar_issue": {key: pop[key] for key in ("cycle", "pc", "instruction")},
+                          "command": pop["command"], "reads": series(pop["read_cycles"], pop["cycle"]),
+                          "writes": series(pop["write_cycles"], pop["cycle"])} for pop in self.pops],
+                "limitations": ["Scalar alignment uses the pinned Atlas instruction encoding and direct combinational issue-to-command wiring.",
+                                "Weight-push write rows are checked; ReadP1 request/response and data values are not independently checked.",
+                                "FP8 pop checks address/order and one-cycle store-read/write alignment, not arithmetic conversion values or accumulator read-during-write visibility."]}
+
+
 def check_trace(header, samples):
     require(isinstance(header, dict), "trace header must be an object")
     require(header.get("schema_version") == 1 and header.get("kind") == "atlas-mxu1-cycle-trace",
@@ -97,6 +222,10 @@ def check_trace(header, samples):
     response_provenance = header.get("response_valid_provenance", "")
     require(isinstance(response_provenance, str), "invalid response provenance")
     bank_tags_required = response_provenance.startswith("reconstructed_from_registered_bank_tags")
+    perf = None
+    if "perf_capture" in header:
+        require(header["perf_capture"] == "mxu1_scalar_issue_push_pop_v1", "unsupported perf capture schema")
+        perf = PerfEvents()
     transactions, inflight = [], deque()
     previous_cycle = None
     previous_request = False
@@ -120,6 +249,8 @@ def check_trace(header, samples):
                 reset_seen = True
                 previous_request, previous_compute_request = False, None
                 previous_request_bank = None
+                if perf:
+                    perf.reset()
                 final_idle = False
                 continue
             require(reset_seen, "capture must include reset before sampled execution")
@@ -165,6 +296,7 @@ def check_trace(header, samples):
             require(not accepted or (command_valid and command_op in COMPUTE_OPS),
                     "compute accepted without a valid compute command")
             require(not accepted or boundary, "compute accepted while ReadP0 cannot be reused")
+            scalar_issue = perf.observe(sample, cycle) if perf else None
 
             new_transaction = None
             if accepted:
@@ -172,6 +304,8 @@ def check_trace(header, samples):
                                    "command": metadata(sample, "cmd"), "request_cycles": [],
                                    "feed_cycles": [], "write_cycles": [],
                                    "retired_cycle": None, "feed_boundary_cycle": None}
+                if scalar_issue is not None:
+                    new_transaction["scalar_issue"] = scalar_issue
                 transactions.append(new_transaction)
                 inflight.append(new_transaction)
 
@@ -269,7 +403,14 @@ def check_trace(header, samples):
                                                                        transaction["feed_cycles"])],
                          "feed_to_write_gaps": [w - f for w, f in zip(transaction["write_cycles"],
                                                                      transaction["feed_cycles"])]})
-    return {"schema_version": 1, "status": "trace_obligations_passed", "sample_count": sample_count,
+        if "scalar_issue" in transaction:
+            issued_cycle = transaction["scalar_issue"]["cycle"]
+            measured[-1].update(scalar_issue=transaction["scalar_issue"], issue_to_accept_gap=accepted - issued_cycle,
+                                scalar_relative={"requests": series(transaction["request_cycles"], issued_cycle),
+                                                 "feeds": series(transaction["feed_cycles"], issued_cycle),
+                                                 "writes": series(transaction["write_cycles"], issued_cycle),
+                                                 "retire_age": transaction["retired_cycle"] - issued_cycle})
+    report = {"schema_version": 1, "status": "trace_obligations_passed", "sample_count": sample_count,
             "transaction_count": len(transactions), "unrelated_read_requests": unrelated_requests,
             "response_bank_samples_checked": response_bank_samples,
             "sampling": header["sampling"], "trace_header": header, "transactions": measured,
@@ -282,6 +423,9 @@ def check_trace(header, samples):
                 "Arithmetic result latency is measured from this trace, not asserted from a proposed timing table.",
                 "Valid signals and addresses do not independently validate arithmetic values or same-cycle memory visibility.",
                 "Other ReadP0 users are distinguished but their complete instruction contracts are not checked."]}
+    if perf:
+        report["perf"] = perf.finish()
+    return report
 
 
 def main():

@@ -11,7 +11,7 @@ void fillDelaySlots(Code& code, PassContext& ctx) {
         if (!hasDelaySlot(b) || b.slot) continue;
         std::vector<Instr> nodes = b.body;
         nodes.push_back(*b.terminator);
-        DepGraph g = buildGraph(nodes, entry[bi], dmaRegs);
+        DepGraph g = buildGraph(nodes, entry[bi], dmaRegs, ctx.model);
         // The slot runs after the branch on both paths, so take the latest plain scalar
         // instruction that nothing after it depends on (not even the branch).
         for (int i = (int)b.body.size() - 1; i >= 0; i--) {

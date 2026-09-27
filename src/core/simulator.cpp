@@ -143,7 +143,7 @@ SimResult simulate(const AsmProgram& prog, const SimOptions& opt) {
             return r;
         }
 
-        Footprint f = footprintOf(in, regs);
+        Footprint f = footprintOf(in, regs, opt.model);
         if (!f.error.empty()) violation(where(in) + ": " + f.error);
 
         // Forget work that can no longer constrain anything.

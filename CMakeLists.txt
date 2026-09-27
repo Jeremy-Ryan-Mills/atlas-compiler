@@ -36,3 +36,11 @@ add_test(NAME publication-fixed-tests COMMAND publication-fixed-tests)
 add_executable(publication-dma-tests tests/publication_dma_tests.cpp)
 target_link_libraries(publication-dma-tests atlas)
 add_test(NAME publication-dma-tests COMMAND publication-dma-tests)
+
+add_executable(machine-profile-tests tests/machine_profile_tests.cpp)
+target_link_libraries(machine-profile-tests atlas)
+add_test(NAME machine-profile-tests COMMAND machine-profile-tests)
+
+add_executable(schedule-priority-tests tests/schedule_priority_tests.cpp)
+target_link_libraries(schedule-priority-tests atlas)
+add_test(NAME schedule-priority-tests COMMAND schedule-priority-tests)
