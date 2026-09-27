@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay the pinned Atlas S0 elaboration/lowering flow and record its provenance.
+"""Elaborate an Atlas Chipyard configuration, lower it, and record provenance.
 
 The cached Chipyard JAR is an input artifact. Hashing current Scala sources does
 not establish that the JAR was compiled from those sources.
@@ -14,11 +14,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
 
-TARGET = "chipyard.harness.TestHarness.AtlasShuttleVectorConfig"
+DEFAULT_CONFIG = "EE290SimConfig"
+TOP_MODULE = "chipyard.harness.TestHarness"
 TOOLCHAIN_VERSION = "firtool-1.75.0"
 FORBIDDEN = ("hammer", "vlsi")
 SOURCE_FILES = (
@@ -204,24 +206,96 @@ def embedded_annotations(fir: Path) -> dict:
             "policy": "Only explicitly reviewed inline/non-file annotation classes accepted; no sidecar passed to firtool"}
 
 
-def main() -> int:
-    compiler = checked_path(__file__).parent.parent
+def configuration_name(value: str) -> str:
+    """Accept a single configuration class in the chipyard Scala package."""
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+        raise argparse.ArgumentTypeError("Expected a configuration class name in package chipyard")
+    if any(word in value.lower() for word in FORBIDDEN):
+        raise argparse.ArgumentTypeError("Configuration name contains a prohibited component")
+    return value
+
+
+def target_name(config: str) -> str:
+    return f"{TOP_MODULE}.{configuration_name(config)}"
+
+
+def elaboration_command(java: Path, jar: Path, elaboration: Path, config: str) -> list[str]:
+    return [str(java), "-XX:-UsePerfData", "-Xmx16G", "-Xss8M", "-cp", str(jar), "chipyard.Generator",
+            "--target-dir", str(elaboration), "--name", target_name(config), "--top-module", TOP_MODULE,
+            "--legacy-configs", f"chipyard:{config}"]
+
+
+def generator_lineage(jar_info: dict, build_manifest: Path | None) -> dict:
+    """Match a JAR to a recorded build; do not infer whole-tree equivalence."""
+    if build_manifest is None:
+        return {"status": "UNVERIFIED", "reason": "No generator build manifest supplied"}
+    path = checked_path(build_manifest)
+    record = json.loads(path.read_text())
+    if not isinstance(record, dict) or record.get("schema_version") != 1:
+        raise ValueError("Generator build manifest must use schema_version 1")
+    if record.get("kind") != "chipyard-generator-build" or record.get("status") != "complete":
+        raise ValueError("Generator build manifest must record a completed chipyard-generator-build")
+    built_jar = record.get("generator_jar", {})
+    if not isinstance(built_jar, dict) or built_jar.get("sha256") != jar_info["sha256"]:
+        raise ValueError("Generator JAR SHA-256 does not match the build manifest")
+    snapshot = record.get("source_snapshot", {})
+    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("scope"), str) or not snapshot["scope"].strip():
+        raise ValueError("Generator build manifest must describe its source snapshot scope")
+    before = snapshot.get("before", {})
+    after = snapshot.get("after", {})
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        raise ValueError("Generator build manifest requires before/after source snapshots")
+    digest = before.get("sha256")
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest) or digest != after.get("sha256"):
+        raise ValueError("Generator build manifest source snapshot hashes must match before and after the build")
+    commands = record.get("commands")
+    if not isinstance(commands, list) or not commands:
+        raise ValueError("Generator build manifest must record successful build commands")
+    for command in commands:
+        if (not isinstance(command, dict) or type(command.get("returncode")) is not int
+                or command["returncode"] != 0 or not isinstance(command.get("argv"), list)
+                or not command["argv"] or not all(isinstance(arg, str) for arg in command["argv"])):
+            raise ValueError("Generator build manifest must record successful build commands")
+    return {
+        "status": "RECORDED_BUILD_HASH_MATCH",
+        "build_manifest": artifact(path),
+        "source_snapshot": snapshot,
+        "scope": "Selected JAR matches the recorded completed build; source coverage is limited to that build's snapshot scope",
+    }
+
+
+def parse_arguments(argv: list[str] | None = None, compiler: Path | None = None) -> argparse.Namespace:
+    compiler = compiler or checked_path(__file__).parent.parent
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--chipyard-root", type=Path, default=compiler.parent.parent.parent)
-    parser.add_argument("--output", type=Path, default=compiler / "build" / "rtlgraph-s0")
+    parser.add_argument("--config", type=configuration_name, default=DEFAULT_CONFIG,
+                        help="Configuration class in package chipyard (default: %(default)s)")
+    parser.add_argument("--output", type=Path, help="Default: build/rtlgraph-s0/<config> in the compiler checkout")
+    parser.add_argument("--generator-jar", type=Path,
+                        help="Generator JAR (default: <chipyard-root>/.classpath_cache/chipyard.jar)")
+    parser.add_argument("--generator-build-manifest", type=Path,
+                        help="Build record whose generator JAR hash must match the selected JAR")
     parser.add_argument("--existing-elaboration", type=Path, help="Adopt an existing target directory; do not run Java")
     parser.add_argument("--existing-hw-ir", type=Path, help="Adopt existing HW IR; still verify it with circt-opt")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.existing_hw_ir and not args.existing_elaboration:
         parser.error("--existing-hw-ir requires --existing-elaboration; do not mix fresh FIRRTL with unrelated adopted IR")
+    if args.output is None:
+        args.output = compiler / "build" / "rtlgraph-s0" / args.config
+    return args
+
+
+def main() -> int:
+    args = parse_arguments()
+    target = target_name(args.config)
     root = checked_path(args.chipyard_root)
     output = checked_path(args.output)
     output.mkdir(parents=True, exist_ok=True)
     manifest_path = checked_path(output / "s0-manifest.json")
     elaboration = checked_path(args.existing_elaboration or output / "elaboration")
-    fir = checked_path(elaboration / f"{TARGET}.fir")
+    fir = checked_path(elaboration / f"{target}.fir")
     hw = checked_path(args.existing_hw_ir or output / "atlas.hw.mlir")
-    jar = checked_path(root / ".classpath_cache/chipyard.jar")
+    jar = checked_path(args.generator_jar or root / ".classpath_cache/chipyard.jar")
     java = checked_path(root / ".conda-env/lib/jvm/bin/java")
     firtool = checked_path(root / ".conda-env/riscv-tools/bin/firtool")
     circt_opt = checked_path(root / ".conda-env/riscv-tools/bin/circt-opt")
@@ -234,14 +308,15 @@ def main() -> int:
     ))
     env["JAVA_HOME"] = str(checked_path(root / ".conda-env/lib/jvm"))
     manifest = {
-        "schema_version": 2,
+        "schema_version": 3,
         "started_utc": timestamp(),
         "status": "running",
         "status_scope": "Artifact workflow only; complete does not mean the full S0 milestone or a validated scheduling model",
-        "target": TARGET,
+        "target": target,
+        "config": args.config,
         "chipyard_root": str(root),
         "output": str(output),
-        "cached_jar_source_equivalence": "UNVERIFIED",
+        "source_lineage": "UNVERIFIED",
         "scope": "S0 artifact generation and IR verification; no RTL timing or functional proof",
         "source_hash_scope": "Selected files only; neither a complete source snapshot nor a dirty-tree check",
         "repository_scope": "Selected checkouts and root gitlinks only; no recursive submodule or source scan",
@@ -252,7 +327,6 @@ def main() -> int:
             "inheritance": "Other variables and trailing PATH inherited; environment is not hermetic",
         },
         "limitations": [
-            "Cached JAR source correspondence is UNVERIFIED even when configuration names match",
             "IR parsing/verification establishes structural validity, not functional or timing correctness",
             "External modules and annotation semantics require separate analysis before scheduling claims",
         ],
@@ -285,6 +359,16 @@ def main() -> int:
     try:
         save()
         manifest["driver"] = artifact(checked_path(__file__))
+        manifest["artifacts"]["generator_jar"] = artifact(jar)
+        manifest["generator_build"] = generator_lineage(
+            manifest["artifacts"]["generator_jar"], args.generator_build_manifest)
+        manifest["source_lineage"] = manifest["generator_build"]["status"]
+        if manifest["source_lineage"] == "UNVERIFIED":
+            manifest["limitations"].append("Generator JAR source correspondence is UNVERIFIED even when configuration names match")
+            if not args.generator_jar:
+                manifest["cached_jar_source_equivalence"] = "UNVERIFIED"
+        else:
+            manifest["limitations"].append("Build lineage covers only the inputs recorded in the build manifest, not an independently verified complete or hermetic source snapshot")
         for executable in (java, firtool, circt_opt, espresso):
             if not executable.is_file() or not os.access(executable, os.X_OK):
                 raise RuntimeError(f"Required executable is unavailable: {executable}")
@@ -299,7 +383,6 @@ def main() -> int:
             manifest["tools"][name] = info
             if name != "java" and TOOLCHAIN_VERSION not in info["version"]:
                 raise RuntimeError(f"{name} must report {TOOLCHAIN_VERSION}; found {info['version']}")
-        manifest["artifacts"]["cached_jar"] = artifact(jar)
         for relative in REPOSITORIES:
             manifest["repositories"][relative] = repository_info(root, relative)
         for relative in SOURCE_FILES:
@@ -310,15 +393,14 @@ def main() -> int:
             manifest["sources"][relative] = artifact(source)
         if args.existing_elaboration:
             manifest["elaboration"] = {"mode": "adopted", "path": str(elaboration), "command_provenance": "not established by this run"}
+            manifest["limitations"].append("Adopted FIRRTL linkage to the selected generator JAR is not established by this run")
         else:
             elaboration.mkdir(parents=True, exist_ok=True)
             manifest["elaboration"] = {"mode": "generated", "path": str(elaboration)}
-            run([str(java), "-XX:-UsePerfData", "-Xmx16G", "-Xss8M", "-cp", str(jar), "chipyard.Generator",
-                 "--target-dir", str(elaboration), "--name", TARGET, "--top-module", "chipyard.harness.TestHarness",
-                 "--legacy-configs", "chipyard:AtlasShuttleVectorConfig"], "java", cwd=root)
+            run(elaboration_command(java, jar, elaboration, args.config), "java", cwd=root)
         manifest["artifacts"]["firrtl"] = artifact(fir)
         manifest["annotations"] = embedded_annotations(fir)
-        annotations = checked_path(elaboration / f"{TARGET}.anno.json")
+        annotations = checked_path(elaboration / f"{target}.anno.json")
         if annotations.is_file():
             manifest["artifacts"]["annotation_sidecar"] = artifact(annotations)
         if args.existing_hw_ir:

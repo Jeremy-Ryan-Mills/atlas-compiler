@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+"""Adversarial sampled-interface traces; no simulator or timing LUT required."""
+
+import copy
+from pathlib import Path
+import sys
+import unittest
+
+sys.path.insert(0, str(Path(__file__).absolute().parents[1]))
+from rtlgraph_mxu1_trace import TraceError, check_trace
+
+
+HEADER = {"schema_version": 1, "kind": "atlas-mxu1-cycle-trace",
+          "sampling": "settled_pre_rising_edge", "tile_rows": 32,
+          "response_valid_provenance": "reconstructed_from_registered_bank_tags"}
+
+
+def idle(cycle):
+    return {"cycle": cycle, "reset": False, "cmd": {"valid": False},
+            "accept_compute": False, "p0": {"valid": False, "boundary": True},
+            "mreg_req": {"valid": False}, "mreg_resp_valid": False, "mreg_resp_count": 0,
+            "mreg_resp_banks": [],
+            "acc_read": {"valid": False}, "compute_valid": False, "core_out_valid": False,
+            "acc_write": {"valid": False}, "retire": False, "comp_busy": False}
+
+
+def witness(op="Matmul", count=1, latency=2, push=False):
+    """Construct interface traces with adjustable arithmetic latency and overlap."""
+    starts = [33 + i * 32 if push else 3 + i * 32 for i in range(count)]
+    end = starts[-1] + 33 + latency
+    samples = [{"cycle": 0, "reset": True}] + [idle(c) for c in range(1, end + 1)]
+    if push:
+        samples[1]["cmd"] = {"valid": True, "op": "PushWeight"}
+        for cycle in range(1, 33):
+            samples[cycle]["mreg_req"] = {"valid": True, "mreg": 9, "row": cycle - 1}
+        for cycle in range(2, 34):
+            samples[cycle]["p0"] = {"valid": True, "op": "PushWeight", "row": cycle - 2,
+                                      "boundary": cycle == 33}
+    for index, start in enumerate(starts):
+        command = {"op": op, "mreg": index + 2, "accsel": index % 2, "wslot": index % 2}
+        samples[start]["cmd"] = {"valid": True, **command}
+        samples[start]["accept_compute"] = True
+        for row in range(32):
+            request, feed, write = (samples[start + row], samples[start + row + 1],
+                                    samples[start + row + 1 + latency])
+            request["mreg_req"] = {"valid": True, "mreg": command["mreg"], "row": row}
+            if op == "MatmulAcc":
+                request["acc_read"] = {"valid": True, "accsel": command["accsel"], "row": row}
+            feed["p0"] = {"valid": True, **command, "row": row, "boundary": row == 31}
+            feed["compute_valid"] = True
+            write["core_out_valid"] = True
+            write["acc_write"] = {"valid": True, "accsel": command["accsel"], "row": row}
+            write["retire"] = row == 31
+        for cycle in range(start + 1, start + 33 + latency):
+            samples[cycle]["comp_busy"] = True
+    for cycle in range(1, len(samples)):
+        response = samples[cycle - 1].get("mreg_req", {}).get("valid", False)
+        samples[cycle]["mreg_resp_valid"] = response
+        samples[cycle]["mreg_resp_count"] = int(response)
+        samples[cycle]["mreg_resp_banks"] = [samples[cycle - 1]["mreg_req"]["mreg"] & 31] if response else []
+    return samples
+
+
+class TraceTest(unittest.TestCase):
+    def rejected(self, samples, message):
+        with self.assertRaisesRegex(TraceError, message):
+            check_trace(HEADER, iter(samples))
+
+    def test_matmul_measures_complete_row_series(self):
+        report = check_trace(HEADER, iter(witness()))
+        self.assertEqual(report["status"], "trace_obligations_passed")
+        transaction = report["transactions"][0]
+        self.assertEqual(transaction["requests"]["ages"], list(range(32)))
+        self.assertEqual(transaction["feeds"]["first_age"], 1)
+        self.assertEqual(transaction["writes"]["first_age"], 3)
+        self.assertEqual(transaction["writes"]["uniform_step"], 1)
+        self.assertEqual(transaction["retire_age"], 34)
+
+    def test_result_latency_is_measured_instead_of_fixed(self):
+        transaction = check_trace(HEADER, witness(latency=7))["transactions"][0]
+        self.assertEqual(transaction["writes"]["first_age"], 8)
+        self.assertEqual(transaction["feed_to_write_gaps"], [7] * 32)
+
+    def test_back_to_back_compute_on_final_feed_boundary(self):
+        report = check_trace(HEADER, witness(count=2))
+        self.assertEqual(report["transaction_count"], 2)
+        self.assertEqual([t["retire_age"] for t in report["transactions"]], [34, 34])
+        self.assertEqual([t["command"]["accsel"] for t in report["transactions"]], [0, 1])
+
+    def test_matmulacc_reads_aligned_accumulator_rows(self):
+        report = check_trace(HEADER, witness(op="MatmulAcc"))
+        self.assertEqual(report["status"], "trace_obligations_passed")
+        samples = witness(op="MatmulAcc")
+        samples[4]["acc_read"]["row"] = 0
+        self.rejected(samples, "accumulator read address")
+
+    def test_plain_matmul_does_not_read_accumulator(self):
+        samples = witness()
+        samples[3]["acc_read"] = {"valid": True, "accsel": 0, "row": 0}
+        self.rejected(samples, "accumulator read enable")
+
+    def test_unrelated_port_user_does_not_become_compute(self):
+        report = check_trace(HEADER, witness(push=True))
+        self.assertEqual(report["transaction_count"], 1)
+        self.assertEqual(report["unrelated_read_requests"], 32)
+
+    def test_wrong_request_bank_or_repeated_row(self):
+        for field, value, error in (("mreg", 7, "wrong mreg"), ("row", 0, "request rows")):
+            with self.subTest(field=field):
+                samples = witness()
+                samples[4]["mreg_req"][field] = value
+                self.rejected(samples, error)
+
+    def test_response_must_follow_actual_request(self):
+        samples = witness()
+        samples[4]["mreg_resp_valid"], samples[4]["mreg_resp_count"] = False, 0
+        samples[4]["mreg_resp_banks"] = []
+        self.rejected(samples, "response bank routing mismatch")
+
+    def test_response_bank_tags_must_be_one_hot(self):
+        samples = witness()
+        samples[4]["mreg_resp_count"] = 2
+        self.rejected(samples, "not one-hot")
+
+    def test_response_bank_identity_is_checked_for_compute_and_other_reads(self):
+        for push, cycle in ((False, 4), (True, 2)):
+            with self.subTest(push=push):
+                samples = witness(push=push)
+                samples[cycle]["mreg_resp_banks"] = [17]
+                self.rejected(samples, "response bank routing mismatch")
+
+    def test_response_bank_list_count_and_presence_are_required(self):
+        samples = witness()
+        samples[4]["mreg_resp_banks"] = []
+        self.rejected(samples, "bank list/count mismatch")
+        samples = witness()
+        del samples[4]["mreg_resp_banks"]
+        self.rejected(samples, "missing sampled value mreg_resp_banks")
+        samples = witness()
+        del samples[4]["mreg_resp_count"]
+        self.rejected(samples, "missing sampled value mreg_resp_count")
+        samples = witness()
+        samples[4]["mreg_resp_banks"] = None
+        self.rejected(samples, "unknown/invalid sampled response bank list")
+
+    def test_physical_response_bank_uses_low_five_mreg_bits(self):
+        samples = witness()
+        for sample in samples:
+            for group in ("cmd", "p0", "mreg_req"):
+                if "mreg" in sample.get(group, {}):
+                    sample[group]["mreg"] += 32
+        self.assertEqual(check_trace(HEADER, samples)["status"], "trace_obligations_passed")
+
+    def test_feed_requires_request_and_preserves_metadata(self):
+        samples = witness()
+        samples[4]["p0"]["wslot"] = 1
+        self.rejected(samples, "metadata changed")
+        samples = witness()
+        samples[4]["p0"]["row"] = 1
+        self.rejected(samples, "feed row differs")
+
+    def test_dropped_core_result_is_detected(self):
+        samples = witness()
+        samples[6]["acc_write"]["valid"] = False
+        self.rejected(samples, "core result was dropped")
+
+    def test_result_destination_and_row_order_are_independent(self):
+        for field, value, error in (("accsel", 1, "wrong buffer"), ("row", 1, "result rows")):
+            with self.subTest(field=field):
+                samples = witness()
+                samples[6]["acc_write"][field] = value
+                self.rejected(samples, error)
+
+    def test_retirement_is_final_write_only(self):
+        samples = witness()
+        samples[6]["retire"] = True
+        self.rejected(samples, "retirement does not coincide")
+
+    def test_early_busy_release_is_detected(self):
+        samples = witness()
+        samples[4]["comp_busy"] = False
+        self.rejected(samples, "compute busy disagrees")
+
+    def test_unknown_or_missing_relevant_samples_are_rejected(self):
+        samples = witness()
+        samples[4]["mreg_resp_valid"] = "x"
+        self.rejected(samples, "unknown/non-Boolean")
+        samples = witness()
+        del samples[4]["p0"]["row"]
+        self.rejected(samples, "missing sampled value")
+
+    def test_unknown_invalid_payload_is_not_used(self):
+        samples = witness()
+        samples[-1]["p0"]["row"] = "x"
+        self.assertEqual(check_trace(HEADER, samples)["status"], "trace_obligations_passed")
+
+    def test_gap_reset_and_truncation_are_rejected(self):
+        samples = witness()
+        self.rejected(samples[:8] + samples[9:], "missing, repeated or reordered cycle")
+        samples[8] = {"cycle": 8, "reset": True}
+        self.rejected(samples, "reset interrupted")
+        self.rejected(witness()[:-1], "truncated capture")
+        self.rejected(witness()[1:], "include reset")
+
+    def test_sampling_convention_and_rows_are_explicit(self):
+        for key, value in (("sampling", "post_edge"), ("tile_rows", 16)):
+            header = copy.deepcopy(HEADER)
+            header[key] = value
+            with self.subTest(key=key), self.assertRaises(TraceError):
+                check_trace(header, witness())
+
+
+if __name__ == "__main__":
+    unittest.main()

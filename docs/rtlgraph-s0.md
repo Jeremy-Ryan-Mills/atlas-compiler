@@ -1,8 +1,26 @@
 # RTL graph S0: reproducible artifact and structural query
 
-The selected configuration is `chipyard.AtlasShuttleVectorConfig`, with `chipyard.harness.TestHarness` as the elaborated top. The S0 helpers generate FIRRTL and CIRCT hardware IR from the existing Chipyard generator JAR, record provenance, and query typed SSA connections from scalar issue to the MXU1 command interface. Independent IR verification and the target structural query have passed. This is a build/query prototype; current-source equivalence, functional RTL simulation, and instruction timing remain unvalidated. The compiler's scheduling model and the finished RTL are unchanged.
+The current checkpoint builds the Chipyard generator from the checked-out sources, elaborates `chipyard.EE290SimConfig` with `chipyard.harness.TestHarness` as top, and lowers it to CIRCT hardware IR. On 2026-09-26, the source build, fresh elaboration/lowering, independent IR verification, and typed scalar-to-MXU1 structural query passed. The build record links the JAR to unchanged scoped inputs. The subsequent [MXU1 event and replay checkpoint](rtlgraph-mxu1.md) extends this into acceptance guards, operand/result events, and functional witnesses; [passive tracing](rtlgraph-mxu1-timing.md) now validates observed row ages for one accepted compute. General scheduling safety remains unvalidated. The compiler's scheduling model and the finished RTL are unchanged.
 
-## Configuration identity and provenance
+The selected target is `chipyard.EE290SimConfig`, matching the [baremetal Makefile default](../../baremetal/Makefile#L1-L3) and [simulator invocation](../../baremetal/Makefile#L119-L123). Its [definition](../../../chipyard/src/main/scala/config/EE290Configs.scala#L41-L54) selects Saturn `mxParams`, a broadcast coherence manager, and Tacit tracing. The driver now accepts `--config` (default `EE290SimConfig`), `--generator-jar`, and `--generator-build-manifest`; its default output is `build/rtlgraph-s0/<config>`. Historical artifact counts and validation results below describe the completed `AtlasShuttleVectorConfig` prototype. No existing artifact has been relabeled.
+
+## Current `EE290SimConfig` checkpoint
+
+The [build manifest](../build/rtlgraph-source-build/build-manifest.json) records the successful direct SBT assembly, Java/launcher and driver hashes, environment choices, and input snapshots. The [input inventory](../build/rtlgraph-source-build/inputs-before.json) covers 8,804 files in 249 declared roots; the before/after SHA-256 is `de8ae7ee79f321e59eef4a210451ad7e1c30eb278d7e4e94bb61035ad407db9c` in both snapshots. The SBT log reports compilation of 1,726 Scala and six Java sources. Its published dependencies and incremental compilation machinery are still cached; the snapshot is scoped rather than a complete hermetic input archive.
+
+The fresh [elaboration manifest](../build/rtlgraph-s0/EE290SimConfig/s0-manifest.json) records `RECORDED_BUILD_HASH_MATCH`, all three successful Java/`firtool`/`circt-opt` commands, and CIRCT `firtool-1.75.0`. The emitted FIRRTL is version 3.3.0. All 8,901 embedded annotations belong to the reviewed inline/non-file classes; 268 carry inline black-box source. Elaboration reports 128 warnings, and lowering reports deprecated printf-encoded verification operations. Preserve those logs when establishing later functional and assertion semantics.
+
+| Artifact | Bytes | SHA-256 |
+| --- | ---: | --- |
+| Current-source generator JAR | 433,585,494 | `617e8a38d4365f877ed02df0c1ad700d0b54c73a34ce6308c770886dc0400084` |
+| `EE290SimConfig` FIRRTL | 178,739,543 | `197aab9e74d40e98d4291bd8ffb34e018c74e9e5146196384f1f3405c3c9e989` |
+| [CIRCT hardware IR](../build/rtlgraph-s0/EE290SimConfig/atlas.hw.mlir) | 58,213,524 | `d2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2` |
+
+The new [typed query report](../build/rtlgraph-s0/EE290SimConfig/atlas-query.json) passes the requested structural checks. Its census contains 735 internal modules, 16 external declarations, no generated-module declarations, 2,698 syntactic instance sites, and 576,559 operations. Residual dialects are `builtin`, `comb`, `emit`, `hw`, `om`, `seq`, and `sv`. The external declarations include `TraceSinkMonitor` as well as memory, serial/debug, clock, I/O-cell, and plusarg models; their behavioral contracts remain open work.
+
+The query independently confirms `s1_fire` → `comb.and` → `is_mxu1_launch` → `io_mxu1Cmd_valid`, scalar result index 13 feeding MXU1's command-valid input in `AtlasCore`, and the wrapper's typed wire connection to the sequencer. These are wiring facts from the new IR. This original query does not recover `acceptCompute`; the separate [event query](rtlgraph-mxu1.md#extracted-events-and-their-scope) now checks its local Boolean function and locates operand/result events. Neither establishes operand access ages or validates a legal instruction schedule.
+
+## Historical configuration identity and provenance
 
 The source configuration is [AtlasConfigs.scala](../../chipyard/config/AtlasConfigs.scala#L40-L48). It composes Atlas, one Shuttle core with Saturn `WithShuttleVectorUnit(256, 128, VectorParams.genParams)`, 256-bit SBUS, 16-byte Shuttle tile beats, 64-byte cache blocks, and `EE290BaseConfig`. The full-system environment and its limits are described in [RTL_GRAPH_PLAN.md §4.1](../.agents/notes/RTL_GRAPH_PLAN.md#41-reproducible-hardware-boundary).
 
@@ -12,7 +30,7 @@ The emitted file starts with `FIRRTL version 3.3.0` and preserves source locator
 
 The manifest records 25 selected source files and 11 repository records, including the course-specific TestChipIP, Saturn, Shuttle, and Rocket Chip origins from the root `.gitmodules`. These are a selected provenance sample, not a complete source snapshot or a clean-worktree assertion. The CIRCT source checkout differs from the parent's gitlink in this session; the installed `firtool` and `circt-opt` executables are identified separately by version and SHA-256. A source-checkout revision must not be attributed to those installed binaries without a build record.
 
-## Existing build route
+## Historical cached-JAR build route
 
 Chipyard's local [simulation documentation](../../../../docs/Simulation/Software-RTL-Simulation.rst#L118-L170) explains the generator project, configuration package, and harness/design-top distinction. The actual elaboration invocation is in [common.mk](../../../../common.mk#L149-L157), with the direct Java wrapper in [variables.mk](../../../../variables.mk#L280-L285). The wrapper runs from the Chipyard repository root.
 
@@ -34,11 +52,11 @@ Stock Make invocation is unsuitable under the active access restriction without 
 
 ## FIRRTL and annotation handling
 
-The emitted circuit begins with `circuit TestHarness :%[[`, carrying embedded annotations. Its sidecar `.anno.json` contains the corresponding 8,653 annotations: 8,028 deduplication groups, 273 inline black boxes, 113 enum components, 102 do-not-touch annotations, 72 inline annotations, 47 decoder tables, 10 enum vectors, and 8 enum definitions. The inspection found no file/path/resource fields requiring an external file read. Inline black-box source still requires explicit treatment when establishing the semantics of the resulting hardware model.
+In the historical `AtlasShuttleVectorConfig` run, the emitted circuit begins with `circuit TestHarness :%[[`, carrying embedded annotations. Its sidecar `.anno.json` contains the corresponding 8,653 annotations: 8,028 deduplication groups, 273 inline black boxes, 113 enum components, 102 do-not-touch annotations, 72 inline annotations, 47 decoder tables, 10 enum vectors, and 8 enum definitions. The inspection found no file/path/resource fields requiring an external file read. Inline black-box source still requires explicit treatment when establishing the semantics of the resulting hardware model.
 
 The replay driver inspects embedded annotations and rejects classes outside the reviewed set before lowering. It consumes the FIRRTL with its embedded annotations and does not also pass the sidecar with `--annotation-file`, which would duplicate this annotation input. The ordinary Verilog rule in [common.mk](../../../../common.mk#L217-L236) also replaces sequential memories and emits split Verilog; it should not be copied unchanged for an analysis-oriented hardware IR artifact.
 
-## Lowering and structural evidence
+## Historical lowering and structural evidence
 
 The first `firtool --ir-hw` attempt used debug lowering, named-value preservation, source-location emission, and aggregate preservation. It failed on a clock aggregate with `--preserve-aggregate=all`. Removing that flag produced `build/rtlgraph-s0/atlas.hw.mlir` (53,988,506 bytes) from the 175,132,286-byte FIRRTL input. Independent `circt-opt` parsing/verification and the typed C++ exporter both accepted this artifact. The matching installed tools report `CIRCT firtool-1.75.0`.
 
@@ -63,16 +81,23 @@ The local traversal stops at state, module instances, region-bearing operations,
 
 ## Replaying the tools
 
-Run these commands from the compiler repository. The driver selects the enclosing Chipyard installation, verifies the Java/Espresso/CIRCT tools, and runs Java from the Chipyard root. It uses the cached assembly and does not invoke Make, SBT, or Mill.
+Run these commands from the compiler repository. The build helper runs SBT directly against the current sources, with a fresh global settings directory and a scoped input inventory before and after compilation. Its output is separate from the historical cached assembly. SBT incremental compilation and published dependency caches remain in use; this is a recorded build, not a hermetic build proof. The elaboration driver verifies the resulting JAR hash against that record, selects the enclosing Chipyard Java/Espresso/CIRCT tools, and runs Java from the Chipyard root. Neither helper invokes Make or Mill.
 
 ```sh
-python3 scripts/rtlgraph_s0.py --output build/rtlgraph-s0-replay
-python3 scripts/rtlgraph_query.py build/rtlgraph-s0-replay/atlas.hw.mlir \
+python3 scripts/rtlgraph_build.py
+python3 scripts/rtlgraph_s0.py --config EE290SimConfig \
+  --generator-jar build/rtlgraph-source-build/chipyard-current.jar \
+  --generator-build-manifest build/rtlgraph-source-build/build-manifest.json
+python3 scripts/rtlgraph_query.py build/rtlgraph-s0/EE290SimConfig/atlas.hw.mlir \
   --toolchain ../../../.conda-env/riscv-tools \
   --build-dir build/rtlgraph-s0/query \
-  --export-json build/rtlgraph-s0-replay/atlas-typed.json \
-  > build/rtlgraph-s0-replay/atlas-query.json
+  --export-json build/rtlgraph-s0/EE290SimConfig/atlas-typed.json \
+  > build/rtlgraph-s0/EE290SimConfig/atlas-query.json
 ```
+
+The environment recipe is the user's `ee194_env.sh`, found in this installation at `/bwrcq/home/reednicolas/bin/ee194_env.sh` (also available through `~/bin/ee194_env.sh`); the requested `/user/reednicolas/bin/ee194_env.sh` path was absent. The helpers select the project Conda Java and RISC-V tool paths directly. The source build keeps `USE_CHISEL7` and `CONSTELLATION_STANDALONE` unset to match the audited Chisel 6 route. VCS license setup, shell integration, and the recipe's `mill --version` check are unnecessary for this build/lowering stage. The [baremetal README](../../baremetal/README.md#L13-L36) supplies the compile/run workflow; the separate [replay guide](rtlgraph-mxu1.md#replay) applies the recipe's BWRC and Conda setup for VCS. The direct SBT settings retain Chipyard's [batch startup fallback](../../../../variables.mk#L267-L278); a short temporary runtime directory handles Unix-socket path limits.
+
+The [source inventory](../scripts/rtlgraph_build_inputs.py) covers explicitly listed SBT metadata, source, resource, glue, and unmanaged-library roots. It records content hashes and initialized optional generators, follows checked resource symlinks, and excludes generated outputs. The [build manifest](../build/rtlgraph-source-build/build-manifest.json) records the command, logs, environment choices, tool hashes, and snapshot hashes. Only a successful build with matching before/after input hashes and a matching JAR hash is accepted as `RECORDED_BUILD_HASH_MATCH`. This status describes the supplied build record's scope; it does not establish timing correctness or archive every resolved dependency.
 
 The [query helper](../scripts/rtlgraph_query.py#L198-L299) builds a small C++ executable against installed CIRCT/MLIR headers and libraries with CMake; Python supplies the CLI and graph traversal without parsing printed MLIR. Its report identifies the IR and exporter, selected build inputs, and build-cache provenance. `--skip-build` records whether the saved build manifest matches those inputs; a missing or mismatched record leaves build linkage explicitly unverified. This is a selected build record, not a hermetic toolchain archive.
 
@@ -80,6 +105,8 @@ To verify the original saved artifacts without re-elaborating:
 
 ```sh
 python3 scripts/rtlgraph_s0.py \
+  --config AtlasShuttleVectorConfig \
+  --output build/rtlgraph-s0-adopted \
   --existing-elaboration build/rtlgraph-s0/elaboration \
   --existing-hw-ir build/rtlgraph-s0/atlas.hw.mlir
 ```
@@ -90,7 +117,7 @@ The saved [original query](../build/rtlgraph-s0/atlas-query.json) and [fresh rep
 
 After building the exporter, rerun the structural fixtures with `python3 scripts/tests/test_rtlgraph_query.py build/rtlgraph-s0/query/rtlgraph_export`.
 
-The full S0 stage in the plan remains open: a current-source generator lineage, explicit simulation/environment contracts, and a functional RTL smoke case are still needed. The next analysis task is to extend the selected slice from command-valid wiring into MXU1 acceptance guards and operand events, with independent simulation or proof before emitting scheduling facts.
+The build and structural-query portion now has a recorded current-source lineage for `EE290SimConfig`. The [event/replay checkpoint](rtlgraph-mxu1.md) and [timing trace](rtlgraph-mxu1-timing.md) record the completed acceptance/event slice, functional witnesses, and independently checked row timing for one compute. Full S0 remains open for explicit simulation/environment contracts and source-to-executable build linkage. The next analysis task is broader temporal validation across accumulation, overlapping commands, and resource interference before emitting scheduling facts.
 
 ## Compiler contract checklist
 
