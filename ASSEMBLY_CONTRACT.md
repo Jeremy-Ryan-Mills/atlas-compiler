@@ -1,9 +1,5 @@
 # Functional / Executable Assembly Contract
 
-**Status:** draft v0, building on the PI's proposal to split functional from
-executable assembly. This version describes what the `insert-dma-waits` branch
-implements.
-
 ```
 model ──model mapping──▶ functional .S ──atlas-opt──▶ executable .S ──▶ perf model / RTL
 ```
