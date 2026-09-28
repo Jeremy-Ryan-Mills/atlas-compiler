@@ -134,7 +134,11 @@ class Events:
                             fields['op'] == old['op'] == 0, 'DMA commands have conflicting live DRAM buffers')
             for kind, lsu in (lsu_owners or {}).items():
                 if lsu and value(sample, f'lsu.{kind}.busy') and (kind == 'store' or fields['op'] == 0):
-                    require(not overlaps(fields['line'], beats, lsu['base_line'], 32),
+                    # VLOAD may still drain MREG writes after its final VMEM read.
+                    accesses = lsu.get('reads' if kind == 'load' else 'writes', [])
+                    drained = (len(accesses) == 32 and
+                               all(a < b for a, b in zip(accesses, accesses[1:])) and accesses[-1] < cycle)
+                    require(not overlaps(fields['line'], beats, lsu['base_line'], 32) or drained,
                             'DMA launched against an unfinished LSU buffer owner')
             owner = {**decoded, **fields, 'id': len(self.commands), 'slot': slot, 'beats': beats,
                      'issue_cycle': cycle, 'scalar_pc': value(sample, 'scalar.pc'),
@@ -258,7 +262,7 @@ class Events:
                 'final_dma_completion_cycle': max(command['completion_cycle'] for command in commands),
                 'limitations': ['Finite execution evidence with the captured memory environment, not a universal DMA bound.',
                                 'Scalar register-port values bind DMA command operands; this monitor does not independently execute the scalar register file.',
-                                'Full DMA buffers remain reserved until channel completion; this intentionally does not validate finer streaming buffer reuse.',
+                                'Full DMA buffers remain reserved until channel completion; LSU buffer reuse requires all 32 ordered VMEM accesses before launch.',
                                 'Source tags, beat counts, addresses, saved commands and grants are checked; payloads rely on full output goldens.',
                                 'Only captured DMA/LSU/VPU accesses are covered; host/other-master interference is not independently reconstructed.',
                                 'Cached simulator source-to-binary build linkage remains unverified.']}

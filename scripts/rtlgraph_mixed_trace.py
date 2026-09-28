@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Check a shared DMA/LSU/VPU/MXU execution using observed event ownership.
 
-Reuses the existing DMA, LSU and VPU monitors unchanged. Both MXUs use independent
-compute/pop queues; push commands are checked at acceptance only. Physical MREG
-conflicts are checked across all four engines without asserting a timing LUT.
+Reuses DMA, LSU and VPU monitors. LSU register draining may continue after its
+VMEM stream finishes. Both MXUs use independent compute/pop queues; push commands
+are checked at acceptance only. Physical MREG conflicts are checked across all
+four engines without asserting a timing LUT.
 """
 
 import argparse

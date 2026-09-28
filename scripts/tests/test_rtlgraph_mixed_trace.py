@@ -62,11 +62,64 @@ def witness(first_write=3, both=False):
     return samples
 
 
+def buffer_reuse(kind='load', launch=33, request_age=1, write_age=3):
+    lsu = lsu_capture(kind, request_age, write_age)
+    dma = dma_capture(kind)
+    samples = []
+    for cycle in range(max(len(lsu), launch + len(dma))):
+        sample = blank()
+        if cycle < len(lsu):
+            sample.update(lsu[cycle])
+        if launch <= cycle < launch + len(dma):
+            source = dma[cycle - launch]
+            sample.update({key: value for key, value in source.items()
+                           if key.startswith(('dma.', 'vmem.dma_', 'scalar.dma_'))})
+            if source['scalar.valid'] or source['scalar.fire']:
+                sample.update({key: value for key, value in source.items()
+                               if key.startswith('scalar.') and 'mreg_' not in key})
+        samples.append(sample)
+    return samples
+
+
 def check(samples):
     return check_samples((cycle, cycle * 2000, sample) for cycle, sample in enumerate(samples))
 
 
 class MixedTraceTests(unittest.TestCase):
+    def test_reuse_vload_buffer_after_observed_reads_while_registers_drain(self):
+        for request, write, launch in ((1, 3, 33), (4, 6, 36)):
+            samples = buffer_reuse(request_age=request, write_age=write, launch=launch)
+            self.assertEqual(samples[launch]['lsu.load.busy'], 1)
+            result = check(samples)
+            command = result['lsu_vpu']['commands'][0]
+            self.assertEqual(command['reads']['ages'][-1], launch - 1)
+            self.assertGreater(command['writes']['ages'][-1], launch)
+
+    def test_reuse_rejects_pending_or_same_cycle_final_read(self):
+        for request, launch in ((1, 31), (1, 32), (2, 33)):
+            with self.subTest(request=request, launch=launch), self.assertRaisesRegex(ValueError, 'unfinished LSU buffer'):
+                check(buffer_reuse(request_age=request, write_age=request + 2, launch=launch))
+
+    def test_reuse_rejects_missing_or_reordered_vmem_rows(self):
+        for key, bad, message in (('lsu.vmem.load.valid', 0, 'response does not match'),
+                                   ('lsu.vmem.load.row', 2, 'row order')):
+            samples = buffer_reuse()
+            samples[17][key] = bad
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, message):
+                check(samples)
+
+    def test_reuse_cannot_hide_a_later_vmem_request(self):
+        samples = buffer_reuse()
+        samples[34]['lsu.vmem.load.valid'] = 1
+        with self.assertRaisesRegex(ValueError, 'live conflicting'):
+            check(samples)
+
+    def test_reuse_store_buffer_requires_final_observed_write(self):
+        for launch in (33, 34):
+            with self.subTest(launch=launch), self.assertRaisesRegex(ValueError, 'unfinished LSU buffer'):
+                check(buffer_reuse('store', launch))
+        self.assertEqual(check(buffer_reuse('store', 35))['command_count'], 1)
+
     def test_mixed_map_preserves_existing_maps_and_selection(self):
         self.assertTrue(all(SIGNALS[key] == record for key, record in DMA_SIGNALS.items()))
         for engine in (0, 1):
