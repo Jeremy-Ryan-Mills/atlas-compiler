@@ -42,7 +42,9 @@ def decode_mxu0(word):
 
 
 class Events:
-    def __init__(self):
+    def __init__(self, engine=0):
+        require(engine in (0, 1), 'Unsupported MXU engine')
+        self.engine = engine
         self.commands, self.computes, self.pops = [], [], []
         self.reading, self.writing, self.storing = deque(), deque(), deque()
         self.previous_read = self.previous_store = None
@@ -56,25 +58,26 @@ class Events:
         self.last_cycle, self.sample_count = cycle, self.sample_count + 1
         reset = sample.get('reset')
         if reset != 0:
-            require(not self.commands, 'Reset or unknown reset after MXU0 execution began')
+            require(not self.commands, f'Reset or unknown reset after MXU{self.engine} execution began')
             return
         fire = value(sample, 'scalar.fire')
-        decoded = decode_mxu0(value(sample, 'scalar.instr')) if fire else None
+        decoder = decode_mxu1 if self.engine else decode_mxu0
+        decoded = decoder(value(sample, 'scalar.instr')) if fire else None
         command_valid = value(sample, 'cmd.valid')
-        require(command_valid == (decoded is not None), 'Scalar MXU0 issue and sequencer command are unmatched')
+        require(command_valid == (decoded is not None), f'Scalar MXU{self.engine} issue and sequencer command are unmatched')
         accepts = {key: value(sample, 'accept.' + key) for key in
                    ('compute', 'push_p0', 'push_p1', 'push_bf16', 'pop_fp8', 'pop_bf16')}
-        require(sum(accepts.values()) == command_valid, 'MXU0 command was rejected or accepted more than once')
+        require(sum(accepts.values()) == command_valid, f'MXU{self.engine} command was rejected or accepted more than once')
         if decoded is not None:
             observed = {'op': OPS.get(value(sample, 'cmd.op')),
                         **{name: value(sample, 'cmd.' + name) for name in ('mreg', 'accsel', 'wslot')}}
-            require(decoded == observed, 'Scalar MXU0 operands disagree with sequencer command')
+            require(decoded == observed, f'Scalar MXU{self.engine} operands disagree with sequencer command')
             op = decoded['op']
             accepted = (accepts['compute'] if op in ('Matmul', 'MatmulAcc') else
                         accepts['push_p0'] + accepts['push_p1'] if op in ('PushWeight', 'PushAccFP8') else
                         accepts['push_bf16'] if op == 'PushAccBF16' else
                         accepts['pop_fp8'] if op == 'PopAccFP8' else accepts['pop_bf16'])
-            require(accepted == 1, 'Wrong MXU0 acceptance route')
+            require(accepted == 1, f'Wrong MXU{self.engine} acceptance route')
             command = {'id': len(self.commands), 'accepted_cycle': cycle,
                        'scalar_pc': value(sample, 'scalar.pc'), 'scalar_word': value(sample, 'scalar.instr'), **decoded}
             self.commands.append(command)
@@ -170,10 +173,14 @@ class Events:
         require(retired == expected_retire, 'Compute retirement is not its final independent output row')
         self.previous_read, self.previous_store = current_read, current_store
 
-    def finish(self):
-        require(bool(self.computes) and bool(self.pops), 'Need both compute and pop observations')
+    def finish(self, *, require_compute_pop=True):
+        if require_compute_pop:
+            require(bool(self.computes) and bool(self.pops), 'Need both compute and pop observations')
+        else:
+            require(bool(self.commands), 'Need accepted MXU commands')
         require(not self.reading and not self.writing and not self.storing
-                and self.previous_read is None and self.previous_store is None, 'Truncated capture with pending MXU0 work')
+                and self.previous_read is None and self.previous_store is None,
+                f'Truncated capture with pending MXU{self.engine} work')
         for transaction in self.computes:
             require(all(len(transaction[key]) == 32 for key in ('requests', 'feeds', 'writes')), 'Incomplete compute row stream')
             require(len(transaction['reads']) == (32 if transaction['op'] == 'MatmulAcc' else 0), 'Incomplete or unexpected accumulator reads')
@@ -182,7 +189,7 @@ class Events:
 
         def measured(transaction, fields):
             return {**transaction, **{key: series(transaction[key], transaction['accepted_cycle']) for key in fields}}
-        return {'status': 'mxu0_observed_row_ownership_passed', 'sample_count': self.sample_count,
+        return {'status': f'mxu{self.engine}_observed_row_ownership_passed', 'sample_count': self.sample_count,
                 'command_count': len(self.commands), 'commands': self.commands,
                 'computes': [measured(t, ('requests', 'feeds', 'reads', 'writes')) for t in self.computes],
                 'pops': [measured(t, ('reads', 'writes')) for t in self.pops],

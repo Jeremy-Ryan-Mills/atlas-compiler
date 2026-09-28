@@ -78,10 +78,10 @@ def performance_result(run: dict, log: str, name: str, expected_checks: int) -> 
             "counter_caveat": "CSR counter reads may suppress an increment; report observed bracket values without treating them as waveform edge counts"}
 
 
-def capture_signal_map(selection, *, banks: bool, mxu0: bool = False, vpu: bool = False, lsu: bool = False, dma: bool = False) -> dict:
-    if sum((banks, mxu0, vpu, lsu, dma)) > 1:
+def capture_signal_map(selection, *, banks: bool, mxu0: bool = False, vpu: bool = False, lsu: bool = False, dma: bool = False, mixed: bool = False) -> dict:
+    if sum((banks, mxu0, vpu, lsu, dma, mixed)) > 1:
         raise ValueError("Engine-specific and bank capture modes are mutually exclusive")
-    if vpu or lsu or dma:
+    if vpu or lsu or dma or mixed:
         from rtlgraph_mxu1_vcd import PERF_SIGNALS
         signals = selection.SIGNALS
         for field, signal in PERF_SIGNALS.items():
@@ -132,6 +132,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--capture-vpu", action="store_true", help="Capture VPU row events and scalar/CSR timing; implies --capture")
     parser.add_argument("--capture-lsu", action="store_true", help="Capture LSU/VMEM events together with VPU/scalar timing; implies --capture")
     parser.add_argument("--capture-dma", action="store_true", help="Capture DMA commands/completions and LSU/VPU/scalar timing; implies --capture")
+    parser.add_argument("--capture-mixed", action="store_true", help="Capture DMA/LSU/VPU and both MXU row streams together; implies --capture")
     controls = parser.add_mutually_exclusive_group()
     controls.add_argument("--control-program-words", type=int, help="Build a fixed-capacity full-golden host control; padding follows terminal ECALL")
     controls.add_argument("--control-manifest", type=Path, help="Patch only program bytes of a prepared/passed fixed-capacity control ELF")
@@ -139,13 +140,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.vpu_probe and not args.capture_vpu:
         parser.error("--vpu-probe requires --capture-vpu for independent success-path checking")
-    if sum((args.capture_mxu0, args.capture_banks, args.capture_vpu, args.capture_lsu, args.capture_dma)) > 1:
+    if sum((args.capture_mxu0, args.capture_banks, args.capture_vpu, args.capture_lsu, args.capture_dma, args.capture_mixed)) > 1:
         parser.error("Engine-specific capture modes are mutually exclusive")
     if args.vpu_probe and (args.control_program_words is not None or args.control_manifest):
         parser.error("Fixed-host control currently requires full-golden validation")
     if args.control_program_words is not None and not 1 <= args.control_program_words <= 1024:
         parser.error("--control-program-words must be between 1 and 1024")
-    args.capture = args.capture or args.capture_banks or args.capture_mxu0 or args.capture_vpu or args.capture_lsu or args.capture_dma
+    args.capture = args.capture or args.capture_banks or args.capture_mxu0 or args.capture_vpu or args.capture_lsu or args.capture_dma or args.capture_mixed
     if args.timeout_seconds <= 0:
         parser.error("Timeout must be positive")
     smoke_path, assembly, output = map(checked_path, (args.smoke_manifest, args.assembly, args.output))
@@ -281,7 +282,9 @@ def main(argv: list[str] | None = None) -> int:
         copy_inputs(runtime / "coverage-template.vdb", coverage)
         argv = simulator_command(simulator, binary, runtime / "dramsim2_ini", coverage, name)
         if args.capture:
-            if args.capture_dma:
+            if args.capture_mixed:
+                import rtlgraph_mixed_vcd as selection
+            elif args.capture_dma:
                 import rtlgraph_dma_vcd as selection
             elif args.capture_lsu:
                 import rtlgraph_lsu_vcd as selection
@@ -291,11 +294,11 @@ def main(argv: list[str] | None = None) -> int:
                 import rtlgraph_mxu0_vcd as selection
             else:
                 import rtlgraph_mxu1_vcd as selection
-            signal_map = capture_signal_map(selection, banks=args.capture_banks, mxu0=args.capture_mxu0, vpu=args.capture_vpu, lsu=args.capture_lsu, dma=args.capture_dma)
-            record["capture_kind"] = "dma_lsu_vpu_rows" if args.capture_dma else "lsu_vpu_rows" if args.capture_lsu else "vpu_rows" if args.capture_vpu else "mxu0_overlap" if args.capture_mxu0 else "mxu1_mreg_banks" if args.capture_banks else "mxu1_perf"
+            signal_map = capture_signal_map(selection, banks=args.capture_banks, mxu0=args.capture_mxu0, vpu=args.capture_vpu, lsu=args.capture_lsu, dma=args.capture_dma, mixed=args.capture_mixed)
+            record["capture_kind"] = "dma_lsu_vpu_mxu_rows" if args.capture_mixed else "dma_lsu_vpu_rows" if args.capture_dma else "lsu_vpu_rows" if args.capture_lsu else "vpu_rows" if args.capture_vpu else "mxu0_overlap" if args.capture_mxu0 else "mxu1_mreg_banks" if args.capture_banks else "mxu1_perf"
             record["signal_selection_driver"] = artifact(checked_path(selection.__file__))
             record["signals"] = {field: {"path": path, "width": width} for field, (path, width) in sorted(signal_map.items())}
-            engine = "dma" if args.capture_dma else "lsu" if args.capture_lsu else "vpu" if args.capture_vpu else "mxu0" if args.capture_mxu0 else "mxu1"
+            engine = "mixed" if args.capture_mixed else "dma" if args.capture_dma else "lsu" if args.capture_lsu else "vpu" if args.capture_vpu else "mxu0" if args.capture_mxu0 else "mxu1"
             tcl, vpd, trace, completed = output / "capture.tcl", output / f"{engine}.vpd", output / f"{engine}.vcd", output / "capture-complete.txt"
             tcl.write_text(capture_tcl(signal_map, vpd, completed))
             record["capture_tcl"] = artifact(tcl)

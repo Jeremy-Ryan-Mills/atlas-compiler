@@ -18,6 +18,7 @@ import subprocess
 
 from rtlgraph_kernel import KernelError, assemble, instruction_words, integer, load_assembler, read_text, tokens
 from rtlgraph_memory_schedule import translate as memory_translate
+from rtlgraph_schedule import translate as compute_translate
 from rtlgraph_s0 import artifact
 
 
@@ -106,6 +107,16 @@ def translate(source, *, to_compiler):
         elif op in {'ECALL', 'FENCE'}:
             require(len(p) == 1, 'unexpected operand on ' + op)
             out.append(op.lower() if to_compiler else op)
+        elif op == 'SELI':
+            require(len(p) == 3, 'SELI requires a scale register and a 12-bit immediate')
+            scale = integer(p[1], 31, '' if to_compiler else 'e')
+            value = integer(p[2], 4095)
+            out.append(f'seli e{scale}, {value}' if to_compiler else f'SELI {scale}, {value}')
+        elif op.endswith(('.MXU0', '.MXU1')):
+            # Reuse the checked MXU operand mappings. The VPU memory-window
+            # adapter deliberately rejects MXUs, while this full stream has
+            # their real loads, scale setup, and completion guards available.
+            out.append(compute_translate(line, to_compiler=to_compiler).strip())
         else:
             out.append(memory_translate(line, to_compiler=to_compiler).strip())
         # DBG0 publishes completion to the replay host. Even a source without
@@ -182,7 +193,8 @@ def same_operations(source, candidate, assembler):
             'native schedule changed encoded non-idle operations or operands')
 
 
-def prepare(source_path, assembler_path, compiler_path, profile_path, output, *, relocate_perf_markers=False):
+def prepare(source_path, assembler_path, compiler_path, profile_path, output, *, relocate_perf_markers=False,
+            mxu0_profile=None, mxu1_profile=None):
     source, assembler = read_text(source_path), load_assembler(assembler_path)
     require(active(source)[-1].upper() == 'ECALL' and
             sum(tokens(line)[0].upper() == 'ECALL' for line in active(source)) == 1,
@@ -197,6 +209,11 @@ def prepare(source_path, assembler_path, compiler_path, profile_path, output, *,
     output.mkdir(parents=True, exist_ok=False)
     prepared = output / 'original.compiler.S'
     prepared.write_text(native)
+    profiles = [(f'mxu{engine}_profile', f'--experimental-mxu{engine}-profile', path)
+                for engine, path in ((0, mxu0_profile), (1, mxu1_profile)) if path is not None]
+    model_flags = ['--rtl-dma-profile', str(profile_path)]
+    for _, flag, path in profiles:
+        model_flags += [flag, str(path)]
     report = dict(schema='atlas.rtlgraph.dma-native-schedule.v1', status='preparing',
                   inputs={name: artifact(path) for name, path in
                           (('source', source_path), ('assembler', assembler_path), ('compiler', compiler_path),
@@ -206,19 +223,20 @@ def prepare(source_path, assembler_path, compiler_path, profile_path, output, *,
                   instrumentation=dict(relocated=relocate_perf_markers,
                                        private_registers=list(markers.private_registers) if markers else [],
                                        policy='Starting cycle read before the scheduled kernel; ending read/SUB/DBG1 before the last existing DMA.WAIT. Only diagnostic counter scope changes.' if markers else 'Original CSR instructions remain functional scheduling barriers.'),
-                  scope='Native atlas-opt dependency and resource scheduling of the complete supported straight-line scalar/DMA/LSU/VPU stream; no handwritten ordering or unary-specific transformation.',
+                  scope='Native atlas-opt dependency and resource scheduling of the complete supported straight-line scalar/DMA/LSU/VPU/MXU stream; no handwritten ordering or unary-specific transformation.',
                   publication='All DBG0 CSR accesses conservatively receive atlas.release; explicit source release metadata on other CSRs is preserved.',
                   limitations=['Explicit waits are preserved; no automatic wait insertion.',
-                               'Local LSU/VPU timing remains inherited; no fixed DMA completion bound.',
+                               'Local LSU/VPU and non-overridden MXU timing remain inherited; no fixed DMA completion bound.',
                                'Native model legality and encoded operation preservation require independent RTL/golden validation.'],
                   cases={})
+    report['inputs'].update({name: artifact(path) for name, _, path in profiles})
     directives = '\n'.join(line for line in source.splitlines() if re.match(r'^\s*#\s*@', line)) + '\n'
     duplicates = {}
     for priority in ('critical', 'input'):
         name = 'native_' + priority
         scheduled, candidate = output / f'{name}.compiler.S', output / f'{name}.S'
         command = [str(compiler_path), str(prepared), '--passes', 'strip-artifacts,schedule',
-                   '--schedule-priority', priority, '--rtl-dma-profile', str(profile_path), '-o', str(scheduled)]
+                   '--schedule-priority', priority, *model_flags, '-o', str(scheduled)]
         run = subprocess.run(command, capture_output=True, text=True, env=os.environ.copy())
         log = output / f'{name}.log'
         log.write_text(run.stdout + run.stderr)
@@ -235,7 +253,7 @@ def prepare(source_path, assembler_path, compiler_path, profile_path, output, *,
         # need not be monotone in those gaps, so check the exact final stream.
         checked = output / f'{name}.final-check.compiler.S'
         checked.write_text(translate(result, to_compiler=True))
-        check_command = [str(compiler_path), '--check', str(checked), '--rtl-dma-profile', str(profile_path)]
+        check_command = [str(compiler_path), '--check', str(checked), *model_flags]
         check = subprocess.run(check_command, capture_output=True, text=True, env=os.environ.copy())
         check_log = output / f'{name}.final-check.log'
         check_log.write_text(check.stdout + check.stderr)
@@ -259,9 +277,14 @@ def main():
         parser.add_argument('--' + flag, type=Path, required=True)
     parser.add_argument('--relocate-perf-markers', action='store_true',
                         help='Explicitly expand private benchmark counter scope; original CSR deltas become incomparable')
+    for engine in (0, 1):
+        parser.add_argument(f'--mxu{engine}-profile', type=Path,
+                            help=f'Compose an existing partial MXU{engine} profile with the DMA model')
     args = parser.parse_args()
     report = prepare(*(getattr(args, flag).resolve() for flag in ('source', 'assembler', 'atlas_opt', 'profile', 'output')),
-                     relocate_perf_markers=args.relocate_perf_markers)
+                     relocate_perf_markers=args.relocate_perf_markers,
+                     mxu0_profile=args.mxu0_profile.resolve() if args.mxu0_profile else None,
+                     mxu1_profile=args.mxu1_profile.resolve() if args.mxu1_profile else None)
     print(json.dumps({name: item['word_count'] for name, item in report['cases'].items()}))
 
 

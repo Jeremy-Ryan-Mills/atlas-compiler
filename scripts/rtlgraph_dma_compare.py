@@ -20,6 +20,9 @@ from rtlgraph_s0 import artifact, timestamp
 
 
 def observation(path):
+    if json.loads(path.read_text()).get('capture_kind') == 'dma_lsu_vpu_mxu_rows':
+        from rtlgraph_mixed_trace import summarize
+        return summarize(path)
     from rtlgraph_dma_trace import summarize
     return summarize(path)
 
@@ -54,6 +57,36 @@ def audit_native(static, selected):
             'Native DMA projection differs from canonical model')
     for record in canonical['inputs'].values():
         verify_artifact(record)
+    model_flags = ['--rtl-dma-profile', str(profile)]
+    mxu_profiles = {}
+    for engine in (0, 1):
+        key = f'mxu{engine}_profile'
+        if key not in static['inputs']:
+            continue
+        extra = verify_artifact(static['inputs'][key])
+        items = [line.split('=', 1) for line in extra.read_text().splitlines() if line]
+        require(all(len(pair) == 2 for pair in items) and len(dict(items)) == len(items),
+                'Malformed native MXU profile')
+        fields = dict(items)
+        evidence_path = extra.parent / 'profile.json'
+        evidence = json.loads(evidence_path.read_text())
+        require(evidence.get('schema_version') == 1 and
+                evidence.get('kind') == f'atlas-partial-mxu{engine}-profile' and
+                evidence.get('config') == 'EE290SimConfig', 'Native MXU evidence identity differs')
+        require(evidence['inputs']['hardware_ir']['sha256'] == settings['source_ir_sha256'],
+                'Native MXU and DMA hardware IR differ')
+        require(fields == dict(schema=f'atlas-mxu{engine}-profile-v1', config='EE290SimConfig',
+                               source_ir_sha256=settings['source_ir_sha256'],
+                               evidence_sha256=artifact(evidence_path)['sha256'],
+                               **{key: str(value) for key, value in evidence['compiler_overrides'].items()}),
+                'Native MXU projection differs from canonical model')
+        for record in evidence['inputs'].values():
+            verify_artifact(record)
+        verify_artifact(evidence['typed'])
+        for record in evidence.get('analysis_dependencies', {}).values():
+            verify_artifact(record)
+        model_flags.extend([f'--experimental-mxu{engine}-profile', str(extra)])
+        mxu_profiles[key] = dict(projection=artifact(extra), canonical=artifact(evidence_path))
     native_input = verify_artifact(static['native_input'])
     source = verify_artifact(static['inputs']['source']).read_text()
     markers = None
@@ -71,7 +104,7 @@ def audit_native(static, selected):
         command = case['command']
         require(name in ('native_critical', 'native_input'), 'Unknown native schedule policy')
         expected = [str(compiler), str(native_input), '--passes', 'strip-artifacts,schedule',
-                    '--schedule-priority', name.removeprefix('native_'), '--rtl-dma-profile', str(profile),
+                    '--schedule-priority', name.removeprefix('native_'), *model_flags,
                     '-o', case['scheduled']['path']]
         require(command == expected, 'Native scheduler command differs from recorded inputs/model')
         checked = verify_artifact(case['final_check_input'])
@@ -83,12 +116,15 @@ def audit_native(static, selected):
                 'Replayed candidate differs from native compiler output and marker policy')
         require(checked.read_text() == translate(verify_artifact(case['assembly']).read_text(), to_compiler=True),
                 'Final native check did not cover the replayed assembly')
-        check_command = [str(compiler), '--check', str(checked), '--rtl-dma-profile', str(profile)]
+        check_command = [str(compiler), '--check', str(checked), *model_flags]
         require(case['final_check_command'] == check_command, 'Native check command differs from model/input')
         check = subprocess.run(check_command, capture_output=True, text=True, env=os.environ.copy())
         require(check.returncode == 0, 'Exact final native schedule no longer passes its model: ' + check.stdout + check.stderr)
-    return dict(profile=static['inputs']['profile'], canonical=artifact(canonical_path),
-                compiler=static['inputs']['compiler'], exact_final_native_checks_repeated=True)
+    result = dict(profile=static['inputs']['profile'], canonical=artifact(canonical_path),
+                  compiler=static['inputs']['compiler'], exact_final_native_checks_repeated=True)
+    if mxu_profiles:
+        result['mxu_profiles'] = mxu_profiles
+    return result
 
 
 def compare(original, memory_baseline, candidates, candidate_manifest):
@@ -124,8 +160,11 @@ def compare(original, memory_baseline, candidates, candidate_manifest):
         verify_runtime(simulator.parent, run['runtime_files'])
         for library in run['runtime_libraries'].values():
             verify_artifact(library)
+        words = instruction_words(load_assembler(assembler_path), source.read_text(), include_idle=False)
+        if any(word & 0x7f == 0x77 for word in words):
+            require('mxu' in report, 'MXU instructions require a mixed-engine observation')
         signature = {
-            'operations': Counter(instruction_words(load_assembler(assembler_path), source.read_text(), include_idle=False)),
+            'operations': Counter(words),
             'transfers': transfer_signature(report),
             'control': control,
             'runtime': (run['simulator']['sha256'],
@@ -139,7 +178,11 @@ def compare(original, memory_baseline, candidates, candidate_manifest):
             baseline = signature
         for key, value in signature.items():
             require(value == baseline[key], 'Comparison mismatch: ' + key)
-        report_path = path.parent / 'dma-events-comparison.json'
+        # Keep strengthened mixed-monitor evidence separate from earlier checks
+        # of the same execution. Captured RTL bytes are never rewritten.
+        report_name = ('mixed-events-comparison-' + report['driver']['sha256'][:12] + '.json'
+                       if 'mxu' in report else 'dma-events-comparison.json')
+        report_path = path.parent / report_name
         if report_path.exists():
             old = json.loads(report_path.read_text())
             require(old == report, 'Existing DMA observation differs; use a fresh report location')
@@ -150,6 +193,8 @@ def compare(original, memory_baseline, candidates, candidate_manifest):
                          'first_issue_cycle': signature['first_issue'],
                          'checked_words': completion['functional_result']['checked_words'],
                          'dma_commands': len(report['commands'])}
+        if 'mxu' in report:
+            results[name]['mxu_commands'] = {key: value['command_count'] for key, value in report['mxu'].items()}
     comparisons = {}
     for name in [*(name for name, _ in references if name != 'original'), *candidates]:
         refs = ['original'] if name == 'memory_baseline' else [key for key, _ in references]
@@ -174,6 +219,9 @@ def compare(original, memory_baseline, candidates, candidate_manifest):
                             'Cached simulator source-to-binary build linkage remains unverified.']}
     if native_audit:
         result['native_compiler_audit'] = native_audit
+    if any('mxu_commands' in case for case in results.values()):
+        require(all('mxu_commands' in case for case in results.values()), 'Mixed-engine observation missing from a compared run')
+        result['scope']['correctness'] += ' Mixed captures also check accepted MXU commands, compute/pop rows, and cross-engine physical MREG conflicts; push payloads remain golden-only.'
     return result
 
 

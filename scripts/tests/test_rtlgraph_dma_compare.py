@@ -262,6 +262,91 @@ class DmaCompareTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'no longer passes'):
                 self.compare_native()
 
+    def add_mxu_profile(self, engine):
+        directory = self.root / f'mxu{engine}'
+        directory.mkdir()
+        dma = json.loads((self.root / 'profile.json').read_text())
+        typed = directory / 'typed.json'
+        typed.write_text('{}\n')
+        canonical = directory / 'profile.json'
+        overrides = dict(overwrite_acc_read_hold=0)
+        if engine == 1:
+            overrides['first_write_age'] = 3
+        canonical.write_text(json.dumps(dict(schema_version=1, kind=f'atlas-partial-mxu{engine}-profile',
+            config='EE290SimConfig', inputs=dict(hardware_ir=dma['inputs']['hardware_ir']),
+            typed=artifact(typed), compiler_overrides=overrides)))
+        profile = directory / f'atlas-mxu{engine}.profile'
+        profile.write_text(f'schema=atlas-mxu{engine}-profile-v1\nconfig=EE290SimConfig\n'
+                          f'source_ir_sha256={dma["inputs"]["hardware_ir"]["sha256"]}\n'
+                          f'evidence_sha256={artifact(canonical)["sha256"]}\n' +
+                          ''.join(f'{key}={value}\n' for key, value in overrides.items()))
+        self.record['inputs'][f'mxu{engine}_profile'] = artifact(profile)
+        case = self.record['cases']['native_critical']
+        flags = [f'--experimental-mxu{engine}-profile', str(profile)]
+        case['command'][-2:-2] = flags
+        case['final_check_command'].extend(flags)
+        self.save_static()
+        return profile
+
+    def test_native_combined_profiles_bind_both_scheduler_and_checker(self):
+        self.native_fixture(version=2)
+        for engine in (0, 1):
+            self.add_mxu_profile(engine)
+        with patch('rtlgraph_dma_compare.subprocess.run') as check:
+            check.return_value.returncode = 0
+            result = self.compare_native()
+        self.assertEqual(set(result['native_compiler_audit']['mxu_profiles']), {'mxu0_profile', 'mxu1_profile'})
+        self.assertIn('--experimental-mxu1-profile', check.call_args.args[0])
+
+    def test_native_mxu_profile_cannot_be_omitted_from_final_check(self):
+        case = self.native_fixture(version=2)
+        self.add_mxu_profile(1)
+        del case['final_check_command'][-2:]
+        self.save_static()
+        with self.assertRaisesRegex(ValueError, 'check command differs'):
+            self.compare_native()
+
+    def test_native_mxu_projection_and_ir_identity_are_verified(self):
+        self.native_fixture(version=2)
+        profile = self.add_mxu_profile(1)
+        text = profile.read_text()
+        profile.write_text(text.replace('first_write_age=3', 'first_write_age=4'))
+        self.record['inputs']['mxu1_profile'] = artifact(profile)
+        self.save_static()
+        with self.assertRaisesRegex(ValueError, 'projection differs'):
+            self.compare_native()
+        evidence_path = profile.parent / 'profile.json'
+        evidence = json.loads(evidence_path.read_text())
+        evidence['inputs']['hardware_ir']['sha256'] = '0' * 64
+        evidence_path.write_text(json.dumps(evidence))
+        with self.assertRaisesRegex(ValueError, 'hardware IR differ'):
+            self.compare_native()
+
+    def test_native_mxu_typed_evidence_mutation_is_rejected(self):
+        self.native_fixture(version=2)
+        profile = self.add_mxu_profile(0)
+        (profile.parent / 'typed.json').write_text('changed\n')
+        with self.assertRaisesRegex(ValueError, 'SHA-256 changed'):
+            self.compare_native()
+
+    def test_mxu_program_cannot_use_only_a_dma_observation(self):
+        with patch('rtlgraph_dma_compare.instruction_words', return_value=[0x77]):
+            with self.assertRaisesRegex(ValueError, 'require a mixed-engine observation'):
+                self.run_compare()
+
+    def test_strengthened_mixed_observation_preserves_prior_report(self):
+        for report in self.reports.values():
+            report['mxu'] = {'mxu1': {'command_count': 2}}
+            report['driver'] = {'sha256': '0' * 64}
+        first = self.run_compare()
+        path = Path(first['cases']['original']['observation']['path'])
+        before = path.read_bytes()
+        for report in self.reports.values():
+            report['driver']['sha256'] = '1' * 64
+        second = self.run_compare()
+        self.assertNotEqual(second['cases']['original']['observation']['path'], str(path))
+        self.assertEqual(path.read_bytes(), before)
+
 
 if __name__ == '__main__':
     unittest.main()

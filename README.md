@@ -26,6 +26,8 @@ current model; [fused attention](docs/rtlgraph-attention.md) demonstrates a meas
 
 The [MXU0 projection](docs/rtlgraph-mxu0.md) independently extracts overwrite accumulator-read behavior; [VPU evidence](docs/rtlgraph-vpu.md) checks issue/resource guards. The [corpus scheduling guide](docs/rtlgraph-corpus-scheduling.md) describes the broader paired experiments and their validation boundaries.
 
+The [full-kernel DMA/MXU experiment](docs/rtlgraph-mixed-dma.md) combines existing profiles and measures fused-attention completion **24,932→22,132 cycles**, including DMA waits, with all output checks passing. Its controls separate that gain from the earlier compute-only schedule and record the lack of an additional completion gain from the MXU profile. [Conditional LSU timing](docs/rtlgraph-lsu-timing.md) derives row timing under an explicit memory-response contract.
+
 | Option | What it does |
 |---|---|
 | `-o FILE` | write the optimized program (otherwise it is printed) |

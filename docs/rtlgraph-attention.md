@@ -1,5 +1,7 @@
 # Fused-attention scheduling experiment
 
+This page records the earlier compute-only experiment. The subsequent [full-kernel DMA/MXU comparison](rtlgraph-mixed-dma.md) replays that schedule under a shared host control and improves its completion **24,000→22,132 edges** while preserving the reachable operations and outputs.
+
 This extends the fixed-operation scheduling experiment to [`perf_fused_attention_mxu1.S`](../../baremetal/assembly/perf_fused_attention_mxu1.S#L187-L403). Its two K-tile stages combine MXU1 matmuls, BF16 accumulator transfers, and VPU normalization operations. The existing golden fixture checks 1,024 output words. VPU and BF16-transfer timings still come from the built-in model; the unchanged K64-derived CIRCT profile supplies only its two documented MXU1 properties.
 
 The generated profile/critical schedule beats the handwritten kernel: **2,942→2,069 measured CSR cycles**, a reduction of **873 cycles (29.67%)**. All three compared programs pass all 1,024 golden output words, `DBG0=1`, and halted/`ECALL` status. This is the first measured improvement over a handwritten kernel in this extraction experiment.

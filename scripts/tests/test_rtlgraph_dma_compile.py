@@ -2,11 +2,15 @@
 """Adversarial assembly and benchmark-boundary checks for native DMA scheduling."""
 from pathlib import Path
 import sys
+import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from rtlgraph_dma_compile import active, extract_markers, insert_markers, translate
+from rtlgraph_dma_compile import active, extract_markers, insert_markers, prepare, same_operations, translate
 from rtlgraph_kernel import KernelError
+from test_rtlgraph_attention import TokenAssembler
 
 
 SOURCE = '''LI x5, 0
@@ -36,6 +40,71 @@ ECALL
 
 
 class NativeDmaAdapterTests(unittest.TestCase):
+    def test_full_stream_mxu_and_scale_operand_roles_roundtrip(self):
+        source = 'SELI 7, 127\nVLOAD 2, x6, 0\n'
+        for engine in (0, 1):
+            source += (f'VMATPUSH.W.MXU{engine} 1, 2\nVMATMUL.MXU{engine} 0, 4, 1\n'
+                       f'VMATMUL.ACC.MXU{engine} 0, 6, 1\nVMATPOP.FP8.MXU{engine} 30, 7, 0\n'
+                       f'VMATPUSH.ACC.BF16.MXU{engine} 1, 2\nVMATPOP.BF16.MXU{engine} 4, 1\n')
+        native = translate(source, to_compiler=True)
+        self.assertIn('seli e7, 127\n', native)
+        for engine in (0, 1):
+            self.assertIn(f'vmatpop.fp8.acc.mxu{engine} m30, acc0, e7\n', native)
+            self.assertIn(f'vmatpush.acc.bf16.mxu{engine} acc1, m2\n', native)
+        restored = translate(native, to_compiler=False)
+        self.assertEqual(restored, source)
+        same_operations(source, restored, TokenAssembler())
+        for changed in (restored.replace('SELI 7, 127', 'SELI 7, 126'),
+                        restored.replace('VMATPOP.FP8.MXU1 30, 7, 0', 'VMATPOP.FP8.MXU1 30, 0, 7'),
+                        restored.replace('VMATMUL.MXU1', 'VMATMUL.MXU0')):
+            with self.subTest(changed=changed), self.assertRaisesRegex(KernelError, 'encoded non-idle'):
+                same_operations(source, changed, TokenAssembler())
+
+    def test_mxu_and_scale_invalid_operands_fail_closed(self):
+        for instruction in ('SELI 32, 1', 'SELI 0, 4096', 'SELI 0, -1', 'SELI 0',
+                            'VMATPUSH.ACC.BF16.MXU0 2, 0', 'VMATPOP.FP8.MXU1 0, 32, 1',
+                            'VMATMUL.MXU0 0, 64, 0', 'VMATMUL.MXU2 0, 2, 0',
+                            'VMATUNKNOWN.MXU0 1, 2'):
+            with self.subTest(instruction=instruction), self.assertRaises(KernelError):
+                translate(instruction, to_compiler=True)
+        for instruction in ('seli x0, 1', 'seli e32, 1', 'seli e0, 4096'):
+            with self.subTest(instruction=instruction), self.assertRaises(KernelError):
+                translate(instruction, to_compiler=False)
+
+    def test_optional_mxu_profiles_reach_both_scheduler_and_exact_final_check(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            files = {}
+            for name in ('source', 'assembler', 'compiler', 'dma', 'mxu0', 'mxu1'):
+                files[name] = root / name
+                files[name].write_text(name + '\n')
+            files['source'].write_text('SELI 7, 127\nVMATPUSH.ACC.BF16.MXU1 1, 2\n'
+                                       'VMATPOP.FP8.MXU1 30, 7, 1\nECALL\n')
+
+            def run(command, **_):
+                if '-o' in command:
+                    Path(command[command.index('-o') + 1]).write_text(Path(command[1]).read_text())
+                return SimpleNamespace(returncode=0, stdout='', stderr='')
+
+            for enabled in ((), (0,), (1,), (0, 1)):
+                with self.subTest(enabled=enabled), patch('rtlgraph_dma_compile.load_assembler', return_value=TokenAssembler()), \
+                        patch('rtlgraph_dma_compile.subprocess.run', side_effect=run) as called:
+                    options = {f'mxu{engine}_profile': files[f'mxu{engine}'] for engine in enabled}
+                    report = prepare(files['source'], files['assembler'], files['compiler'], files['dma'],
+                                     root / ('out-' + ''.join(map(str, enabled))), **options)
+                    expected = ['--rtl-dma-profile', str(files['dma'])]
+                    for engine in enabled:
+                        expected += [f'--experimental-mxu{engine}-profile', str(files[f'mxu{engine}'])]
+                    self.assertEqual(called.call_count, 4)
+                    for engine in (0, 1):
+                        self.assertEqual(f'mxu{engine}_profile' in report['inputs'], engine in enabled)
+                    for case in report['cases'].values():
+                        command, check = case['command'], case['final_check_command']
+                        self.assertEqual(command[command.index('--rtl-dma-profile'):-2], expected)
+                        self.assertEqual(check[3:], expected)
+                        self.assertTrue(case['unchanged_non_idle_words'])
+                        self.assertEqual(case['final_check_returncode'], 0)
+
     def test_native_dma_uses_channel_mnemonic_and_preserves_operand_roles(self):
         text = translate(SOURCE, to_compiler=True)
         self.assertIn('dma.config.ch3 x5\n', text)
