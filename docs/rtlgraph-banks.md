@@ -8,7 +8,7 @@ The [address functions](../../src/main/scala/atlas/common/MregParams.scala#L72-L
 
 The [MREG extractor](../scripts/rtlgraph_mreg.py#L81-L104) uses the existing typed CIRCT exporter, then checks all eight read and eight write predecode functions. For each request port it enumerates 128 valid/register assignments for bank selection and 2,048 register/row assignments for physical row addressing. Exact input widths and permitted input dependencies are checked before enumeration; unsupported operations, state, feedback, and altered mappings are rejected. This is an exhaustive combinational check of the selected cones, not just sampled addresses.
 
-The [structural report](../build/rtlgraph-mreg/structure_1/mreg.json) also records 32 `seq.firmem` banks, each 64 rows by 256 bits, with exactly one read port and one write port. It checks their named address, enable, clock, and write-data connections and records one-cycle memory-port latency attributes. Source locations, typed operations, exporter/source hashes, and the command are retained. These checks do not prove the entire arbitration network, response routing, memory contents, same-cycle visibility, or instruction timing.
+The structural report (`build/rtlgraph-mreg/structure_1/mreg.json`) also records 32 `seq.firmem` banks, each 64 rows by 256 bits, with exactly one read port and one write port. It checks their named address, enable, clock, and write-data connections and records one-cycle memory-port latency attributes. Source locations, typed operations, exporter/source hashes, and the command are retained. These checks do not prove the entire arbitration network, response routing, memory contents, same-cycle visibility, or instruction timing.
 
 Reproduce from the compiler repository, with the [environment](rtlgraph-mxu1.md#replay) set up and a new output directory:
 
@@ -49,7 +49,7 @@ python3 scripts/rtlgraph_conflicts.py \
   --output build/rtlgraph-conflicts/fixtures_replay
 ```
 
-The [recorded fixtures and preflight](../build/rtlgraph-conflicts/fixtures-2/manifest.json) show the invalid case rejected only for `MREG bank 0 port busy (m32)`, while safe/control/repaired bodies pass the selected model. The compiler repair restores a 32-cycle first-compute-to-push gap and overlaps later independent work. Model agreement alone is insufficient; the RTL outcomes and observed requests must be checked separately.
+The recorded fixtures and preflight (`build/rtlgraph-conflicts/fixtures-2/manifest.json`) show the invalid case rejected only for `MREG bank 0 port busy (m32)`, while safe/control/repaired bodies pass the selected model. The compiler repair restores a 32-cycle first-compute-to-push gap and overlaps later independent work. Model agreement alone is insufficient; the RTL outcomes and observed requests must be checked separately.
 
 The original setup loads [A00 into `m0`](../../baremetal/assembly/perf_mm_mxu1_64x64x64.S#L76-L82) from DRAM `0x90000000` and [B10 into `m6`](../../baremetal/assembly/perf_mm_mxu1_64x64x64.S#L130-L136), renamed by the fixture, from `0x90001800`. All 32 corresponding preload beats differ, as do 1,006 of 1,024 bytes; A00 row 31 also differs from B10 row 0. These are inspected K64 setup addresses, not a generalized load-address analysis. Distinct data makes a wrong-half read observable through the functional reference.
 
@@ -79,7 +79,7 @@ An intentionally invalid run is reported separately as `bank_read_conflict_obser
 
 ## Measured results
 
-All four distinct fixture programs were replayed on `EE290SimConfig`. The [combined assessment](../build/rtlgraph-conflicts/results-1.json) verifies the assembly, golden fixture, waveform, checker-input, and simulator-log hash links before accepting each outcome:
+All four distinct fixture programs were replayed on `EE290SimConfig`. The combined assessment (`build/rtlgraph-conflicts/results-1.json`) verifies the assembly, golden fixture, waveform, checker-input, and simulator-log hash links before accepting each outcome:
 
 | Fixture | Target issue gap | CSR cycles | Functional and waveform outcome |
 | --- | ---: | ---: | --- |

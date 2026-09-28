@@ -13,20 +13,13 @@ cmake -S . -B build -G Ninja && cmake --build build
 build/atlas-opt kernel.S -o kernel.opt.S --viz kernel.html
 ```
 
-The [RTL extraction plan](.agents/notes/RTL_GRAPH_PLAN.md),
-[kernel replay results](docs/rtlgraph-kernels.md), and
-[experimental MXU1 profile](docs/rtlgraph-profile.md) describe the optional
-`EE290SimConfig` hardware-evidence flow. It uses the enclosing Atlas checkout;
-`third_party/atlas-npu` is not a registered submodule.
-The [bank experiments](docs/rtlgraph-banks.md) check CIRCT address mapping,
-physical-port conflicts, and compiler repair with controlled RTL witnesses.
-The [fixed-operation search](docs/rtlgraph-search.md) bounds K64/K128 under the
-current model; [fused attention](docs/rtlgraph-attention.md) demonstrates a measured
-29.7% compute-window improvement over handwritten assembly with matching outputs.
-
-The [MXU0 projection](docs/rtlgraph-mxu0.md) independently extracts overwrite accumulator-read behavior; [VPU evidence](docs/rtlgraph-vpu.md) checks issue/resource guards. The [corpus scheduling guide](docs/rtlgraph-corpus-scheduling.md) describes the broader paired experiments and their validation boundaries.
-
-The [full-kernel DMA/MXU experiment](docs/rtlgraph-mixed-dma.md) combines existing profiles and measures fused-attention completion **24,932→22,132 cycles**, including DMA waits, with all output checks passing. Its controls separate that gain from the earlier compute-only schedule and record the lack of an additional completion gain from the MXU profile. [Conditional LSU timing](docs/rtlgraph-lsu-timing.md) derives row timing under an explicit memory-response contract.
+The [RTL extraction plan](.agents/notes/RTL_GRAPH_PLAN.md) and
+[evidence guides](docs/rtlgraph-mixed-dma.md) describe the optional
+`EE290SimConfig` flow. It uses the enclosing Atlas checkout;
+`third_party/atlas-npu` is not a registered submodule. In a controlled
+fused-attention replay, composed scheduling reduced first-issue-to-completion
+time from **24,932 to 22,132 edges** with passing output checks. The guide
+separates the DMA and MXU profile effects and states the validation limits.
 
 | Option | What it does |
 |---|---|

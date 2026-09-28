@@ -49,7 +49,7 @@ This priority makes overlap possible even though the unary buffers share a bank.
 
 ## Typed evidence and limits
 
-The [extractor](../scripts/rtlgraph_dma.py#L97-L270) consumes typed SSA from `ScalarCore`, `DmaEngine`, `AtlasCore`, and `Vmem`. The [recorded report](../build/rtlgraph-dma/local-1/dma.json) includes input hashes, source locations, command arguments, exact checked cones, register structures, and the exported typed artifact.
+The [extractor](../scripts/rtlgraph_dma.py#L97-L270) consumes typed SSA from `ScalarCore`, `DmaEngine`, `AtlasCore`, and `Vmem`. The recorded report (`build/rtlgraph-dma/local-1/dma.json`) includes input hashes, source locations, command arguments, exact checked cones, register structures, and the exported typed artifact.
 
 | Check | Exhaustive cutpoint assignments | Additional structure |
 | --- | ---: | --- |

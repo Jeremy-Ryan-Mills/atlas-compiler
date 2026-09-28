@@ -22,13 +22,13 @@ python3 -B scripts/rtlgraph_schedule.py \
   --output build/rtlgraph-vpu-kernels/unary-candidates-replay
 ```
 
-The first [candidate manifest](../build/rtlgraph-vpu-kernels/unary-candidates-1/manifest.json) records identical built-in critical/input streams and a static full-window count of 1,079 versus the original 961. The previous original RTL replay measured 960 CSR cycles; static issue counts and observed CSR differences are distinct metrics. This is a regression prediction, not a measured improvement. The greedy schedule starts chain C as soon as a slot becomes available, interfering with later work on the longest chain. Deliberately leaving a slot idle can be a useful scheduling choice; priority among currently ready operations alone does not provide that look-ahead.
+The first candidate manifest (`build/rtlgraph-vpu-kernels/unary-candidates-1/manifest.json`) records identical built-in critical/input streams and a static full-window count of 1,079 versus the original 961. The previous original RTL replay measured 960 CSR cycles; static issue counts and observed CSR differences are distinct metrics. This is a regression prediction, not a measured improvement. The greedy schedule starts chain C as soon as a slot becomes available, interfering with later work on the longest chain. Deliberately leaving a slot idle can be a useful scheduling choice; priority among currently ready operations alone does not provide that look-ahead.
 
 ## Measured unary search candidate
 
-The [VPU search](rtlgraph-vpu-search.md) finds a schedule that keeps the longest chain progressing and fits the other two chains around it. The [candidate assembly](../build/rtlgraph-vpu-schedules/unary-exact-2/exact.S) preserves all sixteen operations and their operands. Its encoding matches the replayed `unary-exact-1/exact.S`; the second manifest improves provenance wording without changing the schedule.
+The [VPU search](rtlgraph-vpu-search.md) finds a schedule that keeps the longest chain progressing and fits the other two chains around it. The candidate assembly (`build/rtlgraph-vpu-schedules/unary-exact-2/exact.S`) preserves all sixteen operations and their operands. Its encoding matches the replayed `unary-exact-1/exact.S`; the second manifest improves provenance wording without changing the schedule.
 
-Both original and candidate pass all **1,536 golden words** and all sixteen command/row monitors. The [paired comparison](../build/rtlgraph-vpu/unary-comparison-1.json) independently verifies unchanged outer setup/suffix, the timed memory wrapper, non-idle instruction words, goldens, simulator runtime, and runtime options.
+Both original and candidate pass all **1,536 golden words** and all sixteen command/row monitors. The paired comparison (`build/rtlgraph-vpu/unary-comparison-1.json`) independently verifies unchanged outer setup/suffix, the timed memory wrapper, non-idle instruction words, goldens, simulator runtime, and runtime options.
 
 | Measured interval | Handwritten | Search candidate | Cycles/edges saved |
 | --- | ---: | ---: | ---: |
@@ -42,7 +42,7 @@ A later [fixed-host comparison and memory-overlap experiment](rtlgraph-memory-ov
 
 The eight-cycle gain comes from fixed-model scheduling search. The new [CIRCT valid-chain proofs and VPU row observations](rtlgraph-vpu.md#local-valid-pipeline-proof) corroborate existing timing; they introduce no shorter numerical latency. Softmax, RMSNorm/softmax, and layer normalization search results are encoding-identical to their already validated `builtin_critical` candidates, so this follow-up finds no additional scheduling gain for those fixed-operation cases.
 
-The [combined evidence index](../build/rtlgraph-vpu/results-1.json) records six new successful RTL replays, **66 monitored VPU commands**, 4,608 full-golden word comparisons across four runs, eleven numerical spot checks across two probes, and eighteen local functional-unit valid-chain proofs. Scope and performance regressions are retained separately.
+The combined evidence index (`build/rtlgraph-vpu/results-1.json`) records six new successful RTL replays, **66 monitored VPU commands**, 4,608 full-golden word comparisons across four runs, eleven numerical spot checks across two probes, and eighteen local functional-unit valid-chain proofs. Scope and performance regressions are retained separately.
 
 To replay a new unary candidate with the [licensed environment](rtlgraph-mxu1.md#replay), choose a fresh output directory:
 
@@ -72,6 +72,6 @@ After each operation the program performs `VSTORE`, loads the first BF16 element
 
 Passing these checks establishes five or six observed numerical spot checks, respectively. It does not validate the remaining result elements, all possible operand values, or universal VPU timing. Keep these reports distinct from the eleven full-output golden-backed corpus entries.
 
-Both originals now have passing, independently rechecked captures. The [binary observation](../build/rtlgraph-vpu/runs/binary_probe_1/probe-observation.json) records seven CSR windows of 65, 65, 66, 66, 66, 66, and 66 cycles, totaling **460**, with all five numerical checks reaching the correct success PC. The [reduction observation](../build/rtlgraph-vpu/runs/reduction_probe_1/probe-observation.json) records eight windows of 65, 65, 130, 130, 130, 39, 34, and 34 cycles, totaling **627**, with all six checks passing. Host `DBG1` matches the waveform sum in both cases. First issue through successful `DBG0` spans 709 and 926 clock edges, respectively. These are original-baseline measurements; no binary/reduction optimization has been performed.
+Both originals now have passing, independently rechecked captures. The binary observation (`build/rtlgraph-vpu/runs/binary_probe_1/probe-observation.json`) records seven CSR windows of 65, 65, 66, 66, 66, 66, and 66 cycles, totaling **460**, with all five numerical checks reaching the correct success PC. The reduction observation (`build/rtlgraph-vpu/runs/reduction_probe_1/probe-observation.json`) records eight windows of 65, 65, 130, 130, 130, 39, 34, and 34 cycles, totaling **627**, with all six checks passing. Host `DBG1` matches the waveform sum in both cases. First issue through successful `DBG0` spans 709 and 926 clock edges, respectively. These are original-baseline measurements; no binary/reduction optimization has been performed.
 
 The adapter tests exercise wrapper preservation, interleaved-transfer rejection, immediate wait requirements, and scalar pseudo-instruction expansion. Probe tests reject a failure whose `DBG0` equals one, skipped branches, changed instructions, incomplete execution, altered CSR reads, and incorrect cumulative timing.

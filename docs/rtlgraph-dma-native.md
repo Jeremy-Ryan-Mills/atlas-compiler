@@ -31,7 +31,7 @@ Every candidate must preserve the complete encoded non-idle instruction multiset
 
 ## Measured native schedules
 
-The [controlled unary comparison](../build/rtlgraph-dma-native/comparison-128-2.json) uses the same 128-word host, fixture, runtime, and first issue edge as the earlier handwritten and memory-overlap references. The native adapter starts directly from the original handwritten assembly. All five DMA transfers and explicit waits, scalar operands, and non-idle encoded words are preserved.
+The controlled unary comparison (`build/rtlgraph-dma-native/comparison-128-2.json`) uses the same 128-word host, fixture, runtime, and first issue edge as the earlier handwritten and memory-overlap references. The native adapter starts directly from the original handwritten assembly. All five DMA transfers and explicit waits, scalar operands, and non-idle encoded words are preserved.
 
 | Schedule | First Atlas issue → completed-output `DBG0` | Improvement over handwritten |
 | --- | ---: | ---: |
@@ -44,11 +44,11 @@ Critical priority saves 1,098 edges against handwritten and 947 against the prio
 
 The compiler keeps the original A→B→C output-transfer order. It completes A's computation and stores while input-B DMA remains pending, then launches A's output DMA while B/C work runs. No extra priority heuristic or unary-specific scheduling transformation was added. Unlike the older manual candidate, the native schedule discovers this overlap through operand ranges, explicit completion dependencies, and resource reservations.
 
-As a separate functional case, the same adapter and profile schedule `perf_vec_layernorm_32x32`: [RTL replay](../build/rtlgraph-dma-native/runs/layernorm_critical_1/manifest.json) passes 512 golden words, and its [independent event check](../build/rtlgraph-dma-native/runs/layernorm_critical_1/dma-events-1.json) validates two DMA, four LSU, and ten VPU commands. No controlled layer-normalization speedup comparison is claimed. Both native priorities also pass compiler checks with unary's original counter barriers retained.
+As a separate functional case, the same adapter and profile schedule `perf_vec_layernorm_32x32`: RTL replay (`build/rtlgraph-dma-native/runs/layernorm_critical_1/manifest.json`) passes 512 golden words, and its independent event check (`build/rtlgraph-dma-native/runs/layernorm_critical_1/dma-events-1.json`) validates two DMA, four LSU, and ten VPU commands. No controlled layer-normalization speedup comparison is claimed. Both native priorities also pass compiler checks with unary's original counter barriers retained.
 
 With the version-1 profile, `perf_vec_rmsnorm_softmax` is conservatively rejected: two output stores launch before their waits, and the current DRAM alias model cannot establish disjoint destinations. This is a limitation of the admitted model, not evidence that the handwritten kernel is wrong. The subsequent [configured-range extension](rtlgraph-dram-ranges.md) addresses this limitation without inserting waits. The unary measurements here retain their original version-1 profile and binary identities.
 
-Seven C++ test targets and 73 focused DMA Python tests pass. The 39 new simulator/admission checks include a physical-port collision exposed by an intermediate DMA wait, channel and ring reuse, missing waits after long delays, and block-boundary restrictions. Final adapter review added preservation of `DELAY # keep` and rejection of relocated `atlas.release` markers. Regenerating all six compiler candidates after those fixes produced identical assembly bytes; the replayed programs were unchanged. The [evidence index](../build/rtlgraph-dma-native/results-1.json) binds the final profiles, compiler, regenerated schedules, replay reports, and remaining limits.
+Seven C++ test targets and 73 focused DMA Python tests pass. The 39 new simulator/admission checks include a physical-port collision exposed by an intermediate DMA wait, channel and ring reuse, missing waits after long delays, and block-boundary restrictions. Final adapter review added preservation of `DELAY # keep` and rejection of relocated `atlas.release` markers. Regenerating all six compiler candidates after those fixes produced identical assembly bytes; the replayed programs were unchanged. The evidence index (`build/rtlgraph-dma-native/results-1.json`) binds the final profiles, compiler, regenerated schedules, replay reports, and remaining limits.
 
 ## Reproduce
 

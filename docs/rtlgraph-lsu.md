@@ -14,7 +14,7 @@ All deterministic [LSU VMEM request pairs](../../src/main/scala/atlas/lsu/LSU.sc
 
 ## Typed CIRCT checks
 
-[The extractor](../scripts/rtlgraph_lsu.py#L21-L123) consumes the existing `EE290SimConfig` S0 hardware IR through the typed C++ exporter. It records source locations, SSA cones, input hashes, command arguments, and the resulting typed artifact. The recorded [local evidence](../build/rtlgraph-lsu/local-2/lsu.json) passed 78 finite cutpoint assignments, five resettable control recurrences, and twelve direct `AtlasCore` wiring paths, with the expected module bindings checked:
+[The extractor](../scripts/rtlgraph_lsu.py#L21-L123) consumes the existing `EE290SimConfig` S0 hardware IR through the typed C++ exporter. It records source locations, SSA cones, input hashes, command arguments, and the resulting typed artifact. The recorded local evidence (`build/rtlgraph-lsu/local-2/lsu.json`) passed 78 finite cutpoint assignments, five resettable control recurrences, and twelve direct `AtlasCore` wiring paths, with the expected module bindings checked:
 
 | Checked fact | Scope |
 | --- | --- |
@@ -35,7 +35,7 @@ The same pass checks VPU/LSU logical issue hazards, LSU/VPU physical-bank collis
 
 These checks cover the recorded executions. They do not establish timing for every state, memory environment, or interference pattern. LSU command addresses are measured rather than independently reconstructed from scalar registers; payloads, other engines' physical ports, and TileLink arbitration are not fully captured. The cached simulator's source-to-binary build linkage remains unverified.
 
-The controlled [handwritten](../build/rtlgraph-memory/runs/original_1/lsu-events-1.json), [compute-only schedule](../build/rtlgraph-memory/runs/exact_1/lsu-events-1.json), and [memory-overlap schedule](../build/rtlgraph-memory/runs/overlap_1/lsu-events-1.json) all passed the monitor. A second host layout with 83 instruction words passed for both the [handwritten](../build/rtlgraph-memory/runs/original_83_1/lsu-events-1.json) and [overlap](../build/rtlgraph-memory/runs/overlap_83_1/lsu-events-1.json) programs. Each replay contains six `VLOAD`s, six `VSTORE`s, sixteen VPU commands, and 1,536 passing golden-word comparisons. All 60 observed LSU transfers agree with the inherited model:
+The controlled handwritten (`build/rtlgraph-memory/runs/original_1/lsu-events-1.json`), compute-only schedule (`build/rtlgraph-memory/runs/exact_1/lsu-events-1.json`), and memory-overlap schedule (`build/rtlgraph-memory/runs/overlap_1/lsu-events-1.json`) all passed the monitor. A second host layout with 83 instruction words passed for both the handwritten (`build/rtlgraph-memory/runs/original_83_1/lsu-events-1.json`) and overlap (`build/rtlgraph-memory/runs/overlap_83_1/lsu-events-1.json`) programs. Each replay contains six `VLOAD`s, six `VSTORE`s, sixteen VPU commands, and 1,536 passing golden-word comparisons. All 60 observed LSU transfers agree with the inherited model:
 
 | Event relative to scalar issue | `VLOAD` | `VSTORE` |
 | --- | --- | --- |

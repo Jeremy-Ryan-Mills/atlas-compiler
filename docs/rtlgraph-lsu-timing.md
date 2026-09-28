@@ -2,7 +2,7 @@
 
 The [new timing query](../scripts/rtlgraph_lsu_timing.py#L130-L153) derives the `EE290SimConfig` LSU request stream from typed state/counter transitions. With an explicitly assumed one-cycle source-memory response contract, it also derives the existing write and release ages. It introduces no compiler timing override and makes no new VPU latency claim.
 
-The [evidence report](../build/rtlgraph-mixed-dma/timing/local-1/lsu-timing.json) retains the hardware IR hash, typed artifact, source locations, checked cones, exact assumptions, and bounded trajectory. Its input is the prior [LSU local evidence](../build/rtlgraph-lsu/local-2/lsu.json), which is freshly rechecked rather than accepted by its status string. Existing extractors and historical evidence remain unchanged.
+The evidence report (`build/rtlgraph-mixed-dma/timing/local-1/lsu-timing.json`) retains the hardware IR hash, typed artifact, source locations, checked cones, exact assumptions, and bounded trajectory. Its input is the prior LSU local evidence (`build/rtlgraph-lsu/local-2/lsu.json`), which is freshly rechecked rather than accepted by its status string. Existing extractors and historical evidence remain unchanged.
 
 ## What is established internally
 

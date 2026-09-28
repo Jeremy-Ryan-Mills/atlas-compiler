@@ -18,7 +18,7 @@ The best full-kernel schedules save **1,868 edges (7.78%)** against the earlier 
 
 The same-priority control is important: adding the MXU1 profile shortens the interval through the ending counter by 32 edges, but final completion is **four edges worse** than the DMA-only critical schedule. Four observed pop/overwrite overlaps occur in the combined critical schedule, versus zero in the DMA-only control. Memory behavior offsets that local timing benefit; this experiment establishes no additional full-completion gain from the MXU1 profile. Counter intervals differ from the handwritten and earlier compute-only programs, so their raw `DBG1` values are diagnostic rather than comparable performance windows.
 
-The [DMA-only comparison](../build/rtlgraph-mixed-dma/fused-mxu1/comparison-dma-2.json), [combined-profile comparison](../build/rtlgraph-mixed-dma/fused-mxu1/comparison-profile-2.json), and [earlier-compute comparison](../build/rtlgraph-mixed-dma/fused-mxu1/comparison-compute-only-2.json) retain exact joins. The comparator's generic `memory_baseline` entry names the DMA-only schedule in the second report and the earlier compute-only schedule in the third. All five executions use one audited 512-word host and issue their first Atlas instruction at edge 145,512.
+The DMA-only comparison (`build/rtlgraph-mixed-dma/fused-mxu1/comparison-dma-2.json`), combined-profile comparison (`build/rtlgraph-mixed-dma/fused-mxu1/comparison-profile-2.json`), and earlier-compute comparison (`build/rtlgraph-mixed-dma/fused-mxu1/comparison-compute-only-2.json`) retain exact joins. The comparator's generic `memory_baseline` entry names the DMA-only schedule in the second report and the earlier compute-only schedule in the third. All five executions use one audited 512-word host and issue their first Atlas instruction at edge 145,512.
 
 Two additional VPU comparisons use their own shared 128-word hosts and the unchanged DMA v2 model:
 
@@ -27,7 +27,7 @@ Two additional VPU comparisons use their own shared 128-word hosts and the uncha
 | `perf_vec_layernorm_32x32.S` | 4,608 | 4,593 | 0.33% |
 | `perf_softmax.S` | 4,491 | 4,437 | 1.20% |
 
-Both priorities pass for both kernels. Layer normalization overlaps 64 VPU row-active edges with DMA; softmax overlaps 64 LSU VMEM-access edges with DMA and observes 32 denied DMA read-grant edges. The [VPU result index](../build/rtlgraph-mixed-dma/vpu/results-1.json) records the six replays, independent event checks, controls, and comparisons. These small gains do not imply a uniform speedup across memory conditions.
+Both priorities pass for both kernels. Layer normalization overlaps 64 VPU row-active edges with DMA; softmax overlaps 64 LSU VMEM-access edges with DMA and observes 32 denied DMA read-grant edges. The VPU result index (`build/rtlgraph-mixed-dma/vpu/results-1.json`) records the six replays, independent event checks, controls, and comparisons. These small gains do not imply a uniform speedup across memory conditions.
 
 ## What changed and what was validated
 
@@ -37,7 +37,7 @@ The [straight-line normalizer](../scripts/rtlgraph_straightline.py#L25-L71) remo
 
 The new `--capture-mixed` mode captures DMA/LSU/VPU and both MXUs together. The [mixed monitor](../scripts/rtlgraph_mixed_trace.py#L33-L107) checks common sampled clock/reset, accepted scalar commands, independent compute/pop row ownership, and physical MREG requests across LSU, VPU, MXU0, and MXU1. It rejects two reads or two writes to one physical bank and rejects same-cycle read/write of the same physical row. DMA completion and request/response accounting still use the existing monitor. MXU write ages are measured, not asserted from the proposed model.
 
-Across eleven RTL replays, all **8,192 golden-word comparisons** pass. Independent monitors account for **48 DMA, 144 LSU, 238 VPU, and 230 MXU1 commands**, plus **4,608 accepted DMA requests and responses**. The five fused runs each check all 1,024 golden words; each VPU run checks 512. The [combined result index](../build/rtlgraph-mixed-dma/results-1.json) records the final artifacts and 100 passing focused Python tests. Existing C++ sources and the frozen compiler binary are unchanged.
+Across eleven RTL replays, all **8,192 golden-word comparisons** pass. Independent monitors account for **48 DMA, 144 LSU, 238 VPU, and 230 MXU1 commands**, plus **4,608 accepted DMA requests and responses**. The five fused runs each check all 1,024 golden words; each VPU run checks 512. The combined result index (`build/rtlgraph-mixed-dma/results-1.json`) records the final artifacts and 100 passing focused Python tests. Existing C++ sources and the frozen compiler binary are unchanged.
 
 The parallel [LSU timing analysis](rtlgraph-lsu-timing.md) derives request ages 1–32 from typed control recurrences. Assuming one-cycle source responses, bounded composition derives writes at 3–34 and release at 35. It checks 1,024 local transition cases and 64 initial-counter trajectories, without importing the compiler timing table. This strengthens the evidence for inherited LSU timing; it is not a new shorter latency, a `circt-bmc` result, or a proof of the external response assumption.
 

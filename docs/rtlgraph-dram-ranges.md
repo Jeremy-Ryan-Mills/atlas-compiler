@@ -38,7 +38,7 @@ The evidence remains specific to `chipyard.EE290SimConfig` and the pinned hardwa
 
 ## Measured results
 
-The [controlled comparison](../build/rtlgraph-dram-ranges/comparison-rmsnorm-128-1.json) measures the complete Atlas interval defined above, including input and output DMA waits:
+The controlled comparison (`build/rtlgraph-dram-ranges/comparison-rmsnorm-128-1.json`) measures the complete Atlas interval defined above, including input and output DMA waits:
 
 | Schedule | Clock edges | Edges saved against handwritten | Reduction |
 |---|---:|---:|---:|
@@ -52,7 +52,7 @@ All three replays pass their 1,024-word golden fixtures. Together, independent m
 
 Eight C++ test targets pass; the new range target contains 117 checks after its final focused rerun. The DMA Python suite passes 76 tests, and the new typed-address suite passes 27. Forty-four additional local Boolean assignments and structural checks validate the extracted address-control functions. High-base aliases, low-pointer carry, unknown configuration, control-flow joins, and wrapping ranges have structural/unit coverage; the RTL performance fixture uses base zero. Each performance variant has one execution under the shared launch condition, so these measurements do not establish a universal memory-latency or performance bound.
 
-The [result index](../build/rtlgraph-dram-ranges/results-1.json) records the final evidence, profile, compiler, tests, and replays. Strengthening the evidence checks produced `profile-2`; regenerating both candidates with it preserved their assembly bytes exactly, and the final comparison rechecked their native legality and artifact linkage. The earlier unary measurements remain a separate experiment.
+The result index (`build/rtlgraph-dram-ranges/results-1.json`) records the final evidence, profile, compiler, tests, and replays. Strengthening the evidence checks produced `profile-2`; regenerating both candidates with it preserved their assembly bytes exactly, and the final comparison rechecked their native legality and artifact linkage. The earlier unary measurements remain a separate experiment.
 
 ## Reproduce
 

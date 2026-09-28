@@ -6,7 +6,7 @@ The subsequent [native DMA integration](rtlgraph-dma-native.md) replaces this ex
 
 ## Measured completion
 
-The [128-word controlled comparison](../build/rtlgraph-dma/comparison-128-1.json) and [83-word comparison](../build/rtlgraph-dma/comparison-83-1.json) each hold the host ELF outside its Atlas program array, runtime, fixture, seed, and first Atlas issue edge fixed. The smaller buffer changes host layout and launch conditions relative to the larger control; compare schedules within each column. Each replay passes all 1,536 output words and the independent DMA/LSU/VPU monitor.
+The 128-word controlled comparison (`build/rtlgraph-dma/comparison-128-1.json`) and 83-word comparison (`build/rtlgraph-dma/comparison-83-1.json`) each hold the host ELF outside its Atlas program array, runtime, fixture, seed, and first Atlas issue edge fixed. The smaller buffer changes host layout and launch conditions relative to the larger control; compare schedules within each column. Each replay passes all 1,536 output words and the independent DMA/LSU/VPU monitor.
 
 | Schedule | 128-word host: first issue → `DBG0` | 83-word host: first issue → `DBG0` |
 | --- | ---: | ---: |
@@ -19,13 +19,13 @@ In the 128-word control, output-only overlap saves **598 edges (5.87%)** against
 
 The same second input transfer completes at edge 62,603 in all four runs, despite the candidate's concurrent A work and grant denials. The combined candidate launches C's output transfer at edge 63,130 while independent local work remains; its final output DMA completes at 67,513, followed by `DBG0` two edges later. Individual DMA durations change with memory-system timing and output order. The total saving is a measured effect of this schedule, not a sum of universally fixed DMA-latency reductions.
 
-The [output-only trace](../build/rtlgraph-dma/runs/output_1/dma-events-comparison.json) places C's final `VSTORE` write at edge 63,201 and DMA launch at 63,202, the first idle LSU edge. The [combined trace](../build/rtlgraph-dma/runs/input_output_1/dma-events-comparison.json) similarly observes final write at 63,129 and launch at 63,130. Both therefore start the transfer strictly after its complete source data is written.
+The output-only trace (`build/rtlgraph-dma/runs/output_1/dma-events-comparison.json`) places C's final `VSTORE` write at edge 63,201 and DMA launch at 63,202, the first idle LSU edge. The combined trace (`build/rtlgraph-dma/runs/input_output_1/dma-events-comparison.json`) similarly observes final write at 63,129 and launch at 63,130. Both therefore start the transfer strictly after its complete source data is written.
 
 In both output-overlap variants, C's 64 DMA source-line reads occur at ages 1–62, then 95 and 96. The 32-cycle gap is denied DMA service while deterministic LSU traffic occupies bank zero. The monitor checks that the remaining line identities resume correctly and all 64 acknowledgements complete. This is a concrete execution witness for the [priority/backpressure contract](rtlgraph-dma-hardware.md#completion-and-shared-memory-obligations), not a fixed completion-latency rule.
 
 In the 83-word control, all four schedules first issue at edge 56,097. Combined input/output overlap saves **594 edges (5.95%)** against handwritten and **426 edges (4.34%)** against the previous memory-overlap schedule. Output-only overlap saves **426 edges (4.27%)** and **258 edges (2.63%)**, respectively. The combined candidate has the same 193 DMA/VPU and 192 DMA/LSU overlap edges as in the larger control, with 32 denied read edges and 26 denied write edges. Output-only again has 127/128 overlap edges and 32 denied read edges. Thus both candidates improve completion in both tested conditions, while the extra input-wait move helps substantially only in the second. These observations do not establish a universal ranking or memory-latency bound.
 
-The [evidence index](../build/rtlgraph-dma/results-1.json) joins **eight successful replays, 12,288 golden-word comparisons, 40 DMA commands with 2,560 matched request/response pairs, 96 LSU commands, and 128 VPU commands**. It also records 24,296 separately scoped local CIRCT cutpoint checks, 67 DMA-elided compiler projections, 63 new focused tests, and 14 existing replay tests.
+The evidence index (`build/rtlgraph-dma/results-1.json`) joins **eight successful replays, 12,288 golden-word comparisons, 40 DMA commands with 2,560 matched request/response pairs, 96 LSU commands, and 128 VPU commands**. It also records 24,296 separately scoped local CIRCT cutpoint checks, 67 DMA-elided compiler projections, 63 new focused tests, and 14 existing replay tests.
 
 ## Scheduling and hardware contract
 

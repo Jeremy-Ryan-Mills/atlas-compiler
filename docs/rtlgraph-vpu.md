@@ -2,7 +2,7 @@
 
 The first VPU slice checks the current `EE290SimConfig` issue restrictions, final-write release predicates, and duplicate operand-read control directly in typed CIRCT. The temporal extension below adds exact local functional-unit valid-pipeline laws and a command-attributed row-event monitor. These provide evidence for the inherited compiler model; local unit latency alone does **not** establish full instruction access ages or justify changing a scheduling distance.
 
-The [recorded report](../build/rtlgraph-vpu/run-3/vpu.json) contains the checked functions, opcode overlap matrix, SSA cones, source locations, and input hashes. Its [typed input](../build/rtlgraph-vpu/run-3/typed.json) contains `VectorFSM`, `VectorEngine`, and `VectorEngineTop` from the verified S0 hardware artifact. The [extractor](../scripts/rtlgraph_vpu.py#L228-L264) records its exporter and direct analysis helpers, verifies those inputs remain unchanged during extraction, and records the current read-only Scala references separately. Those source hashes provide context; this is not a new elaboration or source-to-simulator build proof.
+The recorded report (`build/rtlgraph-vpu/run-3/vpu.json`) contains the checked functions, opcode overlap matrix, SSA cones, source locations, and input hashes. Its typed input (`build/rtlgraph-vpu/run-3/typed.json`) contains `VectorFSM`, `VectorEngine`, and `VectorEngineTop` from the verified S0 hardware artifact. The [extractor](../scripts/rtlgraph_vpu.py#L228-L264) records its exporter and direct analysis helpers, verifies those inputs remain unchanged during extraction, and records the current read-only Scala references separately. Those source hashes provide context; this is not a new elaboration or source-to-simulator build proof.
 
 ## Checked facts
 
@@ -28,7 +28,7 @@ This is a legality mask, not an acceptance handshake. The checked wrapper paths 
 
 ### Compiler compatibility
 
-The [joined compatibility report](../build/rtlgraph-vpu/model-1/compatibility.json) checks all **29 supported operations, 29 slot classifications, and 841 ordered overlap pairs** against the built compiler. A [small C++ probe](../scripts/tests/rtlgraph_vpu_model.cpp#L10-L55) calls `findOp`, `vpuUsesBothSlots`, and `vpuCanOverlap` from the existing `libatlas.a`; it does not copy their policy. The [Python join](../scripts/tests/rtlgraph_vpu_model.py#L44-L81) compares those results with the extracted one-unfinished-instruction matrix and checks the compiler's operation classes.
+The joined compatibility report (`build/rtlgraph-vpu/model-1/compatibility.json`) checks all **29 supported operations, 29 slot classifications, and 841 ordered overlap pairs** against the built compiler. A [small C++ probe](../scripts/tests/rtlgraph_vpu_model.cpp#L10-L55) calls `findOp`, `vpuUsesBothSlots`, and `vpuCanOverlap` from the existing `libatlas.a`; it does not copy their policy. The [Python join](../scripts/tests/rtlgraph_vpu_model.py#L44-L81) compares those results with the extracted one-unfinished-instruction matrix and checks the compiler's operation classes.
 
 The [explicit source-correlated mapping](../scripts/tests/rtlgraph_vpu_model.py#L22-L41) follows `VPUOp` enum order and the [compiler opcode table](../src/core/asm.cpp#L53-L67). It excludes inner opcode 15, the generic `fp8` enum entry, because the compiler exposes no matching instruction. `vpack.bf16.fp8` and `vunpack.fp8.bf16` map to distinct inner opcodes 16 and 17; neither substitutes for that entry. Undeclared inner values 30 and 31 and reserved scalar issue-mask bit zero are also outside the compiler comparison. This is a documented source correlation, not a newly recovered full ISA decoder.
 
@@ -81,7 +81,7 @@ Eight [focused tests](../scripts/tests/test_rtlgraph_vpu.py#L1-L98) pass using a
 
 ## Local valid-pipeline proof
 
-The [pipeline extractor](../scripts/rtlgraph_vpu_pipeline.py#L25-L73) follows each selected functional unit's `io_resp_valid` back to `io_req_valid` in typed CIRCT. Every intermediate operation must be an identity wire or an unconditional, one-bit `seq.firreg` using the module's clock. It rejects muxes, feedback, enables, unknown inputs, different clocks, nonzero reset values, and unsupported register attributes. The [recorded extraction](../build/rtlgraph-vpu/pipelines-2/pipelines.json) derives these lengths for eighteen modules from the pinned hardware IR:
+The [pipeline extractor](../scripts/rtlgraph_vpu_pipeline.py#L25-L73) follows each selected functional unit's `io_resp_valid` back to `io_req_valid` in typed CIRCT. Every intermediate operation must be an identity wire or an unconditional, one-bit `seq.firreg` using the module's clock. It rejects muxes, feedback, enables, unknown inputs, different clocks, nonzero reset values, and unsupported register attributes. The recorded extraction (`build/rtlgraph-vpu/pipelines-2/pipelines.json`) derives these lengths for eighteen modules from the pinned hardware IR:
 
 | Functional unit | Clock edges from request-valid to response-valid | Initialization |
 | --- | ---: | --- |
@@ -126,9 +126,9 @@ Three handwritten kernels now pass both their original full-tensor goldens and t
 
 | Kernel | Commands observed | Golden words | Original CSR cycles | Row-event report |
 | --- | ---: | ---: | ---: | --- |
-| `perf_softmax` | 6 | 512 | 337 | [softmax](../build/rtlgraph-vpu/runs/softmax_original_2/vpu-events-final.json) |
-| `perf_vec_rmsnorm_softmax` | 13 | 1,024 | 706 | [RMSNorm/softmax](../build/rtlgraph-vpu/runs/rmsnorm_original_2/vpu-events-final.json) |
-| `perf_unary` | 16 | 1,536 | 960 | [unary](../build/rtlgraph-vpu/runs/unary_original_2/vpu-events-final.json) |
+| `perf_softmax` | 6 | 512 | 337 | softmax (`build/rtlgraph-vpu/runs/softmax_original_2/vpu-events-final.json`) |
+| `perf_vec_rmsnorm_softmax` | 13 | 1,024 | 706 | RMSNorm/softmax (`build/rtlgraph-vpu/runs/rmsnorm_original_2/vpu-events-final.json`) |
+| `perf_unary` | 16 | 1,536 | 960 | unary (`build/rtlgraph-vpu/runs/unary_original_2/vpu-events-final.json`) |
 
 All observed elementwise `VSUB.BF16`, `VMUL.BF16`, `VSQUARE.BF16`, `VTANH`, `VEXP`, `VSQRT`, `VLOG2`, and `VRECIP.BF16` stream 64 source rows at ages 0–63 and write 64 rows at ages 2–65, with slot release at age 65. `VREDMAX.ROW.BF16` reads both 32-row halves at ages 0–31 and writes both destinations at ages 2–33, releasing at 33. `VREDSUM.ROW.BF16` uses the same paired reads and writes at ages 7–38, releasing at 38. `VLI.ALL` writes at ages 1–64, releasing at 64. Every physical response matches the prior cycle's observed request. The RMSNorm and unary traces exercise two simultaneous independent unary commands with separately attributed slots.
 
@@ -138,9 +138,9 @@ The original branching probes now also pass the separate success-path checker an
 
 | Probe | Commands, including two initial `VLI.ALL` operations | Numerical checks | Sum of original CSR windows | Row-event report |
 | --- | ---: | ---: | ---: | --- |
-| `perf_vpu_binary` | 7 | 5 first-element checks | 460 | [binary](../build/rtlgraph-vpu/runs/binary_probe_1/vpu-events-final.json) |
-| `perf_vpu_reduction` | 8 | 6 first-element checks | 627 | [reduction](../build/rtlgraph-vpu/runs/reduction_probe_1/vpu-events-final.json) |
+| `perf_vpu_binary` | 7 | 5 first-element checks | 460 | binary (`build/rtlgraph-vpu/runs/binary_probe_1/vpu-events-final.json`) |
+| `perf_vpu_reduction` | 8 | 6 first-element checks | 627 | reduction (`build/rtlgraph-vpu/runs/reduction_probe_1/vpu-events-final.json`) |
 
 The binary probe adds observed `VADD.BF16`, `VMIN.BF16`, and `VMAX.BF16` coverage with reads at ages 0–63, writes at 2–65, and release at 65. Column `VREDSUM.BF16`, `VREDMIN.BF16`, and `VREDMAX.BF16` read the BF16 pair twice at ages 0–127, write the 64 destination rows at 66–129, and release at 129. The row-min probe matches row-max's paired writes at 2–33. These executions corroborate the inherited column/two-input model and supply event ownership evidence, but only one BF16 element per probe operation has numerical validation. Their cumulative singleton timing windows omit stores, loads, comparisons, and intervening work and are not whole-kernel speedup measurements.
 
-The [exact-search unary candidate](rtlgraph-vpu-search.md) also passes all 1,536 golden words and the [temporal monitor](../build/rtlgraph-vpu/runs/unary_exact_1/vpu-events-final.json) for its sixteen VPU commands. Its original timed region improves **960→952 CSR cycles**, eight cycles saved (0.83%), with unchanged observed access/release ages. This is a scheduling improvement using the existing model, now corroborated by these RTL observations; it does not come from reducing a CIRCT-derived latency. First issue through post-DMA `DBG0` is **10,061→10,443 clock edges** in this pair of executions, 382 more edges, so this is **not an observed whole-replay speedup**. The [kernel experiment](rtlgraph-vpu-kernels.md) separates those measurements. Across the three handwritten baselines, this candidate, and two original probes, all **66 captured VPU commands** pass row ownership and release checks; their functional validation remains split between full-tensor goldens and explicitly limited spot checks.
+The [exact-search unary candidate](rtlgraph-vpu-search.md) also passes all 1,536 golden words and the temporal monitor (`build/rtlgraph-vpu/runs/unary_exact_1/vpu-events-final.json`) for its sixteen VPU commands. Its original timed region improves **960→952 CSR cycles**, eight cycles saved (0.83%), with unchanged observed access/release ages. This is a scheduling improvement using the existing model, now corroborated by these RTL observations; it does not come from reducing a CIRCT-derived latency. First issue through post-DMA `DBG0` is **10,061→10,443 clock edges** in this pair of executions, 382 more edges, so this is **not an observed whole-replay speedup**. The [kernel experiment](rtlgraph-vpu-kernels.md) separates those measurements. Across the three handwritten baselines, this candidate, and two original probes, all **66 captured VPU commands** pass row ownership and release checks; their functional validation remains split between full-tensor goldens and explicitly limited spot checks.

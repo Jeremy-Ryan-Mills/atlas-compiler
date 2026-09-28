@@ -27,7 +27,7 @@ For each baseline that passes, compare paired candidates with the same fixtures,
 
 ## Completed original baselines
 
-The [staged inventory](../build/rtlgraph-corpus/originals-1/inventory.json) records all 14 instruction-preserving copies. The final [baseline report](../build/rtlgraph-corpus/baseline-results-2.json) independently validates all **11 golden-backed originals**, including every fired scalar instruction and consecutive PC through `DBG0`, the two cycle markers, final `DMA.WAIT`, and eventual host halted/`ECALL` status. Each entry links its replay and completion artifacts. The [audit driver](../build/rtlgraph-corpus/finalize-baselines.py) preserves existing completion reports and checks them against freshly derived waveform results.
+The staged inventory (`build/rtlgraph-corpus/originals-1/inventory.json`) records all 14 instruction-preserving copies. The final baseline report (`build/rtlgraph-corpus/baseline-results-2.json`) independently validates all **11 golden-backed originals**, including every fired scalar instruction and consecutive PC through `DBG0`, the two cycle markers, final `DMA.WAIT`, and eventual host halted/`ECALL` status. Each entry links its replay and completion artifacts. The audit driver (`build/rtlgraph-corpus/finalize-baselines.py`) preserves existing completion reports and checks them against freshly derived waveform results.
 
 | Original kernel | Golden words checked | CSR cycle delta | First issue → `DBG0` clock edges |
 | --- | ---: | ---: | ---: |
