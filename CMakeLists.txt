@@ -56,3 +56,11 @@ add_test(NAME rtl-dma-simulator-tests COMMAND rtl-dma-simulator-tests)
 add_executable(rtl-dma-range-tests tests/rtl_dma_range_tests.cpp)
 target_link_libraries(rtl-dma-range-tests atlas)
 add_test(NAME rtl-dma-range-tests COMMAND rtl-dma-range-tests)
+
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+  add_test(NAME footprint-dump-tests COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_SOURCE_DIR}/tests/footprint_dump_tests.py $<TARGET_FILE:atlas-opt>)
+  add_test(NAME rtlgraph-contract-tests COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_SOURCE_DIR}/scripts/tests/test_rtlgraph_contract.py $<TARGET_FILE:atlas-opt>)
+endif()

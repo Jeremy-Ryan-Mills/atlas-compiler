@@ -5,6 +5,7 @@
 #include <string>
 
 #include "core/simulator.h"
+#include "core/model_dump.h"
 #include "passes/pass.h"
 #include "tool/viewer.h"
 
@@ -17,6 +18,7 @@ static void usage() {
                  "  --dma-timing MODE  robust (default): valid for any DMA latency;\n"
                  "                     model: trust npu_model's DMA latency\n"
                  "  --check            only simulate the input and report problems\n"
+                 "  --dump-footprints FILE  only export resolved input footprints and dependencies\n"
                  "  --experimental-mxu1-profile FILE  use a partial RTL timing profile\n"
                  "  --experimental-mxu0-profile FILE  use a partial MXU0 resource profile\n"
                  "  --rtl-dma-profile FILE  use partial RTL DMA capture/completion rules\n"
@@ -37,15 +39,16 @@ static void printProblems(const char* what, const SimResult& r) {
 }
 
 int main(int argc, char** argv) {
-    std::string input, output, vizPath, profilePath, mxu0ProfilePath, dmaProfilePath;
+    std::string input, output, vizPath, profilePath, mxu0ProfilePath, dmaProfilePath, dumpPath;
     std::vector<std::string> passNames;
     PassContext ctx;
-    bool checkOnly = false, quiet = false;
+    bool checkOnly = false, quiet = false, requestedPasses = false;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         bool hasValue = i + 1 < argc;
         if (a == "-o" && hasValue) output = argv[++i];
         else if (a == "--viz" && hasValue) vizPath = argv[++i];
+        else if (a == "--dump-footprints" && hasValue) dumpPath = argv[++i];
         else if (a == "--experimental-mxu1-profile" && hasValue) profilePath = argv[++i];
         else if (a == "--experimental-mxu0-profile" && hasValue) mxu0ProfilePath = argv[++i];
         else if (a == "--rtl-dma-profile" && hasValue) dmaProfilePath = argv[++i];
@@ -59,6 +62,7 @@ int main(int argc, char** argv) {
             }
         }
         else if (a == "--passes" && hasValue) {
+            requestedPasses = true;
             std::stringstream list(argv[++i]);
             for (std::string name; std::getline(list, name, ',');) passNames.push_back(name);
         } else if (a == "--dma-timing" && hasValue) ctx.robustDma = std::string(argv[++i]) != "model";
@@ -77,6 +81,10 @@ int main(int argc, char** argv) {
         usage();
         return 2;
     }
+    if (!dumpPath.empty() && (checkOnly || requestedPasses || !output.empty() || !vizPath.empty())) {
+        std::cerr << "atlas-opt: --dump-footprints cannot combine with --check, --passes, -o, or --viz\n";
+        return 2;
+    }
 
     try {
         if (!profilePath.empty()) ctx.model = readExperimentalMxu1Profile(profilePath);
@@ -91,6 +99,7 @@ int main(int argc, char** argv) {
         SimOptions options;
         options.model = ctx.model;
         AsmProgram original = readAsmFile(input);
+        if (!dumpPath.empty()) return writeFile(dumpPath, dumpFootprints(original, ctx.model)) ? 0 : 1;
         SimResult before = simulate(original, options);
         if (checkOnly) {
             std::cout << input << ": " << before.cycles << " cycles, " << before.issued << " instructions issued ("

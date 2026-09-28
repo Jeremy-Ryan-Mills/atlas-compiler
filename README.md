@@ -20,6 +20,8 @@ The [RTL extraction plan](.agents/notes/RTL_GRAPH_PLAN.md) and
 fused-attention replay, composed scheduling reduced first-issue-to-completion
 time from **24,932 to 22,132 edges** with passing output checks. The guide
 separates the DMA and MXU profile effects and states the validation limits.
+The [assembly handoff](docs/rtlgraph-contract.md) bundles an emitter's `before.S`,
+profiles, resolved footprints, and compiler identity for reproducible scheduling.
 
 | Option | What it does |
 |---|---|
@@ -27,6 +29,7 @@ separates the DMA and MXU profile effects and states the validation limits.
 | `--viz FILE.html` | before/after dependency graph viewer (open it in a browser) |
 | `--passes a,b,c` / `--list-passes` | run only some passes / list them |
 | `--check` | only simulate the input: cycle count and any broken timing rules |
+| `--dump-footprints FILE` | export the input's resolved accesses, holds, and dependencies without scheduling |
 | `--dma-timing model` | trust npu_model's DMA latency instead of staying valid for any latency |
 | `--schedule-priority critical\|input` | choose critical-path priority (default) or input order among ready, resource-legal instructions |
 | `--experimental-mxu1-profile FILE` | load the optional partial MXU1 timing/resource projection; other rules remain built in |
