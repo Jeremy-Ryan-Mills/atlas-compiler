@@ -152,7 +152,7 @@ Footprint footprintOf(const Instr& in, const RegValues& regs) {
     Builder b;
     const OpInfo& op = *in.op;
     if (in.release && op.opClass != OpClass::Csr) {
-        b.f.error = "atlas.release is only valid on a CSR instruction";
+        b.f.error = "atlas.complete is only valid on a CSR instruction";
         return b.f;
     }
     int mxu = op.mxu;
@@ -447,7 +447,7 @@ Dependence dependence(const Instr& a, const Footprint& fa, const Instr& b, const
     if (isBarrier(b)) consider(1, EdgeKind::Order, B.name + " is a barrier");
     // CSR runs before engines; same-tick completion is too late. DMA needs a wait.
     if (b.release)
-        consider(fa.doneAge + 1, EdgeKind::Order, "atlas.release waits for prior fixed-latency work to complete");
+        consider(fa.doneAge + 1, EdgeKind::Order, "atlas.complete waits for prior fixed-latency work to complete");
 
     // DMA commands leave the queue in issue order; waits stay ordered with their channel.
     if (A.engine == Engine::Dma && B.engine == Engine::Dma) {

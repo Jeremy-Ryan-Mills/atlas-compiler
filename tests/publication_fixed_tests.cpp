@@ -25,44 +25,47 @@ static bool reports(const SimResult& result, const std::string& text) {
 
 static AsmProgram one(const Instr& in) { return {{in}, {{}, {}}}; }
 
-static AsmProgram optimize(const std::string& text) {
-    Code code = buildBlocks(parseAsm(text));
+static AsmProgram optimize(const std::string& text, bool output = false) {
+    Code code = buildBlocks(parseAsm(text, "<input>", output));
     PassContext ctx;
     runPasses(code, {}, ctx);
     return flatten(code);
 }
 
-static const std::string release = "csrrwi x0, x1, 0xC10 # atlas.release\n";
+static const std::string release = "atlas.complete 1, 0xC10\n";
 
 static void annotation_round_trip_and_validation() {
-    const std::string marked = "csrrwi x0, x1, 0xC10 # before\tatlas.release after\n";
-    AsmProgram parsed = parseAsm(marked);
+    const std::string marked = "csrrwi x0, x1, 0xC10 # before\tatlas.complete after\n";
+    AsmProgram parsed = parseAsm(marked, "<output>", true);
     CHECK(parsed.instrs[0].release);
-    CHECK(parsed.instrs[0].comment == "before\tatlas.release after");
-    CHECK(parseAsm(printAsm(parsed)).instrs[0].release);
-    CHECK(printAsm(parseAsm(printAsm(parsed))) == printAsm(parsed));
-    for (const std::string token : {"atlas.releaseX", "xatlas.release", "atlas.release,", "ATLAS.RELEASE"}) {
+    CHECK(parsed.instrs[0].comment == "before\tatlas.complete after");
+    CHECK(parseAsm(printAsm(parsed), "<output>", true).instrs[0].release);
+    CHECK(printAsm(parseAsm(printAsm(parsed), "<output>", true)) == printAsm(parsed));
+    for (const std::string token : {"atlas.completeX", "xatlas.complete", "atlas.complete,", "ATLAS.COMPLETE"}) {
         AsmProgram ordinary = parseAsm("csrrwi x0, x1, 0xC10 # " + token + "\n");
         CHECK(!ordinary.instrs[0].release);
         CHECK(!parseAsm(printAsm(ordinary)).instrs[0].release);
     }
     CHECK(!parseAsm("csrrwi x0, x1, 0xC10\n").instrs[0].release);
-    CHECK(parseAsm("csrrwi x0, x2, 0xC11 # atlas.release\n").instrs[0].release);
+    CHECK(throws([&] { parseAsm("csrrwi x0, x2, 0xC11 # atlas.complete\n"); }));
+    for (bool output : {false, true})
+        for (const std::string comment : {"atlas.release", "atlas.complete atlas.release"})
+            CHECK(throws([&] { parseAsm("csrrwi x0, x1, 0xC10 # " + comment + "\n", "<input>", output); }));
 
     Instr generated = makeInstr("csrrwi", 0, 1, 0, 0xC10);
     generated.release = true;
-    CHECK(parseAsm(printAsm(one(generated))).instrs[0].release);
+    CHECK(parseAsm(printAsm(one(generated)), "<output>", true).instrs[0].release);
     generated.comment = "handoff note";
-    AsmProgram reparsed = parseAsm(printAsm(one(generated)));
+    AsmProgram reparsed = parseAsm(printAsm(one(generated)), "<output>", true);
     CHECK(reparsed.instrs[0].release);
-    CHECK(reparsed.instrs[0].comment == "handoff note atlas.release");
-    generated.comment = "handoff atlas.release note";
-    CHECK(parseAsm(printAsm(one(generated))).instrs[0].comment == generated.comment);
+    CHECK(reparsed.instrs[0].comment == "handoff note atlas.complete");
+    generated.comment = "handoff atlas.complete note";
+    CHECK(parseAsm(printAsm(one(generated)), "<output>", true).instrs[0].comment == generated.comment);
     generated.release = false;
     CHECK(throws([&] { printAsm(one(generated)); }));
 
     for (const std::string instruction : {"vstore m0, 0(x0)", "delay 3", "fence", "nop", "li x1, 100000", ""})
-        CHECK(throws([&] { parseAsm(instruction + " # atlas.release\n"); }));
+        CHECK(throws([&] { parseAsm(instruction + " # atlas.complete\n"); }));
 
     Instr invalid = makeInstr("vstore");
     invalid.release = true;
@@ -88,31 +91,31 @@ static void completion_distances_and_outgoing_order() {
         CHECK(dependence(publication, pub, prior, f).distance >= 1);
         AsmProgram scheduled = optimize(text + "\n" + release);
         CHECK(simulate(scheduled).violations.empty());
-        CHECK(printAsm(optimize(printAsm(scheduled))) == printAsm(scheduled));
+        CHECK(printAsm(optimize(printAsm(scheduled), true)) == printAsm(scheduled));
     }
     AsmProgram plain = parseAsm("vstore m0, 0(x0)\ncsrrwi x0, x1, 0xC10\n");
     CHECK(dependence(plain.instrs[0], footprintOf(plain.instrs[0], zeroRegs()),
                      plain.instrs[1], footprintOf(plain.instrs[1], zeroRegs())).distance == 1);
     CHECK(simulate(plain).violations.empty());  // Unmarked behavior is unchanged.
-    CHECK(reports(simulate(parseAsm("vstore m0, 0(x0)\n" + release)), "atlas.release publishes before"));
+    CHECK(reports(simulate(parseAsm("vstore m0, 0(x0)\n" + release)), "atlas.complete publishes before"));
 }
 
 static void checker_rejects_same_tick_completion() {
     // VSTORE completes at issue+34, after same-cycle CSR execution.
-    CHECK(reports(simulate(parseAsm("vstore m0, 0(x0)\ndelay 32\n" + release)), "atlas.release publishes before"));
+    CHECK(reports(simulate(parseAsm("vstore m0, 0(x0)\ndelay 32\n" + release)), "atlas.complete publishes before"));
     CHECK(simulate(parseAsm("vstore m0, 0(x0)\ndelay 33\n" + release)).violations.empty());
-    CHECK(reports(simulate(parseAsm("lw x2, 0(x0)\ndelay 1\n" + release)), "atlas.release publishes before"));
+    CHECK(reports(simulate(parseAsm("lw x2, 0(x0)\ndelay 1\n" + release)), "atlas.complete publishes before"));
     CHECK(simulate(parseAsm("lw x2, 0(x0)\ndelay 2\n" + release)).violations.empty());
-    CHECK(reports(simulate(parseAsm("sw x1, 0(x0)\n" + release)), "atlas.release publishes before"));
+    CHECK(reports(simulate(parseAsm("sw x1, 0(x0)\n" + release)), "atlas.complete publishes before"));
     CHECK(simulate(parseAsm("sw x1, 0(x0)\nnop\n" + release)).violations.empty());
 
     // The checker uses modeled latency; preflight requires explicit DMA waits.
-    CHECK(reports(simulate(parseAsm("dma.config.ch0 x0\ndelay 1\n" + release)), "atlas.release publishes before"));
+    CHECK(reports(simulate(parseAsm("dma.config.ch0 x0\ndelay 1\n" + release)), "atlas.complete publishes before"));
     CHECK(simulate(parseAsm("dma.config.ch0 x0\ndelay 2\n" + release)).violations.empty());
     for (double scale : {1.0, 10.0, 100.0}) {
         SimOptions options;
         options.dmaLatencyScale = scale;
-        CHECK(reports(simulate(parseAsm("dma.config.ch0 x0\n" + release), options), "atlas.release publishes before"));
+        CHECK(reports(simulate(parseAsm("dma.config.ch0 x0\n" + release), options), "atlas.complete publishes before"));
         CHECK(simulate(parseAsm("dma.config.ch0 x0\ndma.wait.ch0\n" + release), options).violations.empty());
     }
 }
@@ -124,13 +127,13 @@ static void checker_and_scheduler_cover_block_boundaries_and_slots() {
              "vstore m0, 0(x0)\nbeq x0, x0, exit\nnop\nexit:\n"}) {
         AsmProgram out = optimize(prefix + release);
         CHECK(simulate(out).violations.empty());
-        CHECK(printAsm(optimize(printAsm(out))) == printAsm(out));
+        CHECK(printAsm(optimize(printAsm(out), true)) == printAsm(out));
     }
     // Reject release slots on both branch paths.
     for (const std::string branch : {"beq x0, x0, exit", "bne x0, x0, exit", "jal x0, exit"}) {
         AsmProgram in = parseAsm(branch + "\n" + release + "exit:\nnop\n");
         SimResult result = simulate(in);
-        CHECK(reports(result, "atlas.release in a delay slot"));
+        CHECK(reports(result, "atlas.complete in a delay slot"));
         CHECK(!result.stopReason.empty());
         CHECK(result.issued == 0);
     }

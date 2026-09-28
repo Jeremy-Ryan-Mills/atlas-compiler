@@ -210,11 +210,15 @@ static std::vector<Instr> expandLi(int rd, long long value) {
 }
 
 // Match an exact, case-sensitive, whitespace-delimited token.
-static bool hasReleaseToken(const std::string& comment) {
+static bool hasCompletionToken(const std::string& comment) {
     std::istringstream words(comment);
-    for (std::string word; words >> word;)
-        if (word == "atlas.release") return true;
-    return false;
+    bool completion = false;
+    for (std::string word; words >> word;) {
+        if (word == "atlas.release")
+            throw ParseError("unsupported annotation '" + word + "'; use atlas.complete");
+        completion |= word == "atlas.complete";
+    }
+    return completion;
 }
 
 // Fills the operands of `in` from the tokens after the mnemonic. A branch target
@@ -245,7 +249,7 @@ static void parseOperands(Instr& in, const std::vector<std::string>& toks, bool&
     }
 }
 
-AsmProgram parseAsm(const std::string& text, const std::string& fileName) {
+AsmProgram parseAsm(const std::string& text, const std::string& fileName, bool allowOutputAnnotations) {
     AsmProgram prog;
     prog.labels.emplace_back();
     std::vector<std::pair<int, long long>> numericTargets;  // (instruction index, word offset)
@@ -263,9 +267,11 @@ AsmProgram parseAsm(const std::string& text, const std::string& fileName) {
                 prog.labels.back().push_back(trim(line.substr(0, colon)));
                 line = trim(line.substr(colon + 1));
             }
-            bool release = hasReleaseToken(comment);
+            bool release = hasCompletionToken(comment);
+            if (release && !allowOutputAnnotations)
+                throw ParseError("# atlas.complete is output metadata; use atlas.complete in input");
             if (line.empty()) {
-                if (release) throw ParseError("atlas.release must annotate a CSR instruction");
+                if (release) throw ParseError("atlas.complete must annotate a CSR instruction");
                 continue;
             }
             std::vector<std::string> toks = tokenize(line);
@@ -275,6 +281,23 @@ AsmProgram parseAsm(const std::string& text, const std::string& fileName) {
                 produced.push_back(makeNop());
             } else if (name == "li" && toks.size() == 3) {
                 produced = expandLi(parseXReg(toks[1]), parseImm(toks[2]));
+            } else if (name == "atlas.complete") {
+                if (toks.size() != 3)
+                    throw ParseError("'atlas.complete' expects 2 operands, got " + std::to_string(toks.size() - 1));
+                Instr in;
+                if (toks[1].starts_with("x")) {
+                    in = makeInstr("csrrw", 0, parseXReg(toks[1]));
+                } else {
+                    long long value = parseImm(toks[1]);
+                    if (value < 0 || value > 31)
+                        throw ParseError("'atlas.complete' expects an immediate value in 0..31");
+                    in = makeInstr("csrrwi", 0, (int)value);
+                }
+                in.imm = parseImm(toks[2], &in.immText);
+                if (in.imm < 0 || in.imm > 0xFFF)
+                    throw ParseError("'atlas.complete' expects a CSR address in 0..0xFFF");
+                produced.push_back(in);
+                release = true;
             } else {
                 Instr in;
                 in.op = findOp(name);
@@ -291,7 +314,7 @@ AsmProgram parseAsm(const std::string& text, const std::string& fileName) {
                 in.keep = in.op->opClass == OpClass::Delay && comment.find("keep") != std::string::npos;
                 in.release = release;
                 if (in.release && in.op->opClass != OpClass::Csr)
-                    throw ParseError("atlas.release is only valid on a CSR instruction");
+                    throw ParseError("atlas.complete is only valid on a CSR instruction");
                 prog.instrs.push_back(in);
                 prog.labels.emplace_back();
             }
@@ -323,12 +346,12 @@ AsmProgram parseAsm(const std::string& text, const std::string& fileName) {
     return prog;
 }
 
-AsmProgram readAsmFile(const std::string& path) {
+AsmProgram readAsmFile(const std::string& path, bool allowOutputAnnotations) {
     std::ifstream f(path);
     if (!f) throw ParseError("cannot open " + path);
     std::stringstream ss;
     ss << f.rdbuf();
-    return parseAsm(ss.str(), path);
+    return parseAsm(ss.str(), path, allowOutputAnnotations);
 }
 
 std::string formatInstr(const Instr& in) {
@@ -354,12 +377,12 @@ std::string printAsm(const AsmProgram& prog) {
         if (i == prog.instrs.size()) break;
         const Instr& in = prog.instrs[i];
         if (in.release && in.op->opClass != OpClass::Csr)
-            throw ParseError("atlas.release is only valid on a CSR instruction");
-        bool token = hasReleaseToken(in.comment);
+            throw ParseError("atlas.complete is only valid on a CSR instruction");
+        bool token = hasCompletionToken(in.comment);
         if (token && !in.release)
-            throw ParseError("atlas.release comment disagrees with the instruction's release flag");
+            throw ParseError("atlas.complete comment disagrees with the instruction's completion flag");
         std::string comment = in.comment;
-        if (in.release && !token) comment += (comment.empty() ? "" : " ") + std::string("atlas.release");
+        if (in.release && !token) comment += (comment.empty() ? "" : " ") + std::string("atlas.complete");
         out += formatInstr(in);
         if (!comment.empty()) out += "   # " + comment;
         out += "\n";

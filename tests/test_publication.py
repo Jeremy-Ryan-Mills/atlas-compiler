@@ -13,7 +13,7 @@ import pytest
 from tests import harness
 
 
-PUBLISH = 'csrrwi x0, x1, 0xC10 # atlas.release\n'
+PUBLISH = 'csrrwi x0, x1, 0xC10 # atlas.complete\n'
 
 
 @pytest.fixture
@@ -29,7 +29,16 @@ def publication_dir(request, tmp_path):
 def publication_compiler(optimizer):
     if optimizer in harness.BUILTIN_OPTIMIZERS.values():
         pytest.skip('publication contract requires an external atlas-opt')
-    return optimizer
+    def compile_source(source, directory):
+        # Convert model completion writes to compiler input.
+        source = re.sub(
+            r'(?m)^([ \t]*)csrrw(i?)[ \t]+x0,[ \t]*x(\d+),[ \t]*([^\s#]+)'
+            r'[ \t]*#[ \t]*atlas\.complete[ \t]*$',
+            lambda m: f'{m[1]}atlas.complete {m[3] if m[2] else "x" + m[3]}, {m[4]}',
+            source,
+        )
+        return optimizer(source, directory)
+    return compile_source
 
 
 def observe(source, hardware_config_cls, directory, *, dma_scale=1, expected_dbg0=1):
@@ -146,14 +155,14 @@ def test_release_rejects_missing_or_wrong_dma_wait(
     publication_compiler, publication_dir, wait, label
 ):
     source = 'addi x7, x0, 64\ndma.load.ch0 x0, x0, x7\n' + wait + label + PUBLISH
-    with pytest.raises(harness.OptimizerError, match=r'(?i)(release|dma|wait)'):
+    with pytest.raises(harness.OptimizerError, match=r'(?i)(complete|dma|wait)'):
         publication_compiler(source, publication_dir)
     assert not (publication_dir / 'after.S').exists()
 
 
 def test_release_in_architectural_delay_slot_is_rejected(publication_compiler, publication_dir):
     source = 'jal x0, target\n' + PUBLISH + 'target:\naddi x2, x0, 7\n'
-    with pytest.raises(harness.OptimizerError, match=r'(?i)(release|slot)'):
+    with pytest.raises(harness.OptimizerError, match=r'(?i)(complete|slot)'):
         publication_compiler(source, publication_dir)
     assert not (publication_dir / 'after.S').exists()
 
@@ -163,7 +172,7 @@ def test_release_marker_survives_reoptimization(
 ):
     source = 'vstore m0, 0(x0)\ndelay 34\n' + PUBLISH
     first, _, _ = compare(source, publication_compiler, hardware_config_cls, publication_dir)
-    assert first.count('atlas.release') == 1
+    assert first.count('atlas.complete') == 1
     repeat = publication_dir / 'repeat'
     repeat.mkdir(exist_ok=True)
     second = publication_compiler(first, repeat)
@@ -179,7 +188,7 @@ def test_unmarked_progress_marker_remains_immediate(
     source = 'vstore m0, 0(x0)\ncsrrwi x0, x1, 0xC10 # progress only\n'
     optimized = publication_compiler(source, publication_dir)
     observed = observe(optimized, hardware_config_cls, publication_dir / 'model')
-    assert 'atlas.release' not in optimized
+    assert 'atlas.complete' not in optimized
     assert observed['cycle'] == 3
     assert observed['active_engines'] == ('LSU',)
     assert observed['vmem'][:1024] == bytes(1024)

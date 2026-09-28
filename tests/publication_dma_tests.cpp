@@ -69,7 +69,7 @@ static void accept(const std::string& source, const std::vector<std::string>& pa
 }
 
 int main() {
-    const std::string release = "csrrwi x0, x1, 0xC10 # atlas.release\n";
+    const std::string release = "atlas.complete 1, 0xC10\n";
     accept(release);  // idle entry
     accept("dma.config.ch0 x0\ndma.wait.ch0\n" + release);
     accept("dma.config.ch0 x0\ndma.wait.ch0\n" + release, {"schedule"});
@@ -146,9 +146,9 @@ int main() {
     // Reject before passes mutate code or logs.
     reject("delay 8\n" + release, "requires the schedule pass", {"strip-artifacts"});
     reject(release, "requires the schedule pass", {"fill-delay-slots"});
-    reject("delay 8\njal x0, done\n" + release + "done:\nnop\n", "release in a delay slot");
-    reject("beq x0, x1, done\n" + release + "done:\nnop\n", "release in a delay slot");
-    reject("jal x0, done\nnop\ndead:\njal x0, done\n" + release + "done:\nnop\n", "release in a delay slot");
+    reject("delay 8\njal x0, done\n" + release + "done:\nnop\n", "atlas.complete in a delay slot");
+    reject("beq x0, x1, done\n" + release + "done:\nnop\n", "atlas.complete in a delay slot");
+    reject("jal x0, done\nnop\ndead:\njal x0, done\n" + release + "done:\nnop\n", "atlas.complete in a delay slot");
     Code malformed = buildBlocks(parseAsm("delay 8\naddi x2, x0, 1\n"));
     malformed.blocks[0].body.back().release = true;
     rejectCode(malformed, "only supported on CSR");
@@ -160,7 +160,7 @@ int main() {
     try { stripArtifacts(direct, ctx); }
     catch (const std::runtime_error& error) {
         rejected = true;
-        CHECK(std::string(error.what()).find("release in a delay slot") != std::string::npos);
+        CHECK(std::string(error.what()).find("atlas.complete in a delay slot") != std::string::npos);
     }
     CHECK(rejected);
     CHECK(snapshot(direct) == before);

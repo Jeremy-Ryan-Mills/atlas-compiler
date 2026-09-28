@@ -86,13 +86,13 @@ SimResult simulate(const AsmProgram& prog, const SimOptions& opt) {
         const Instr& in = prog.instrs[i];
         if (!in.release) continue;
         if (in.op->opClass != OpClass::Csr) {
-            violation(where(in) + ": atlas.release is only valid on a CSR instruction");
-            r.stopReason = "invalid release annotation";
+            violation(where(in) + ": atlas.complete is only valid on a CSR instruction");
+            r.stopReason = "invalid completion annotation";
             return r;
         }
         if (i > 0 && isControlFlow(*prog.instrs[i - 1].op)) {
-            violation(where(in) + ": atlas.release in a delay slot is not supported");
-            r.stopReason = "unsupported release delay slot";
+            violation(where(in) + ": atlas.complete in a delay slot is not supported");
+            r.stopReason = "unsupported completion delay slot";
             return r;
         }
     }
@@ -121,11 +121,11 @@ SimResult simulate(const AsmProgram& prog, const SimOptions& opt) {
         if (in.release) {
             for (const InFlight& a : active)
                 if (a.issue + a.f.doneAge >= t)
-                    violation(where(in) + ": atlas.release publishes before " + where(a.in) +
+                    violation(where(in) + ": atlas.complete publishes before " + where(a.in) +
                               " completes (cycle " + std::to_string(a.issue + a.f.doneAge) + ")");
             for (const QueuedDma& d : dma)
                 if (d.complete >= t)
-                    violation(where(in) + ": atlas.release publishes before " + where(d.in) +
+                    violation(where(in) + ": atlas.complete publishes before " + where(d.in) +
                               " completes (cycle " + std::to_string(d.complete) + ")");
         }
 
