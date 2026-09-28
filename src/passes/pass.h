@@ -7,11 +7,12 @@
 
 // Settings and results shared by the passes of one run.
 struct PassContext {
-    bool robustDma = true;         // never assume when a dma.wait releases (.agents/OPEN_QUESTIONS.md #1)
+    bool robustDma = true;         // never assume when a dma.wait releases (.agents/notes/OPEN_QUESTIONS.md #1)
     std::vector<std::string> log;  // each pass adds a line describing what it did
 };
 
-// A pass rewrites the blocks of a program in place. See src/passes/README.md.
+// A pass rewrites the blocks of a functional-assembly program in place.
+// See src/passes/README.md.
 struct Pass {
     const char* name;         // used with --passes on the command line
     const char* description;
@@ -25,7 +26,7 @@ const std::vector<Pass>& allPasses();
 void runPasses(Code& code, const std::vector<std::string>& names, PassContext& ctx);
 
 // The passes (one .cpp file each).
-void stripArtifacts(Code& code, PassContext& ctx);
+void removeNops(Code& code, PassContext& ctx);
 void insertDmaWaits(Code& code, PassContext& ctx);
 void fillDelaySlots(Code& code, PassContext& ctx);
 void schedule(Code& code, PassContext& ctx);

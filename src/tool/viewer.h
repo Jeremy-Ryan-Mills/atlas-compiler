@@ -17,21 +17,22 @@ struct GraphView {
 
 struct BlockView {
     std::string name;
-    GraphView before, after;
+    GraphView input, output;       // input: functional assembly (cycles = program order)
     int lowerBound = 0;            // critical path length of the dependency graph
 };
 
 struct ProgramView {
     std::string source;
+    int inputInstructions = 0;
     std::vector<BlockView> blocks;
-    SimResult before, after;
+    SimResult result;              // simulation of the executable assembly
 };
 
-// Builds the before/after graphs of every block. `optimized` must have the same
-// blocks as `original` (the passes keep the block structure).
-ProgramView buildProgramView(const std::string& source, const AsmProgram& original, const Code& optimized,
-                             const SimResult& before, const SimResult& after);
+// Builds the input and output graphs of every block. `optimized` must have the
+// same blocks as `functional` (the passes keep the block structure).
+ProgramView buildProgramView(const std::string& source, const AsmProgram& functional, const Code& optimized,
+                             const SimResult& result);
 
-// Self-contained HTML page showing each block's dependency graph before and after
-// optimization, with every instruction placed at the cycle it issues.
+// Self-contained HTML page showing each block's dependency graph in input order
+// and as scheduled, with every scheduled instruction placed at the cycle it issues.
 std::string renderHtml(const ProgramView& view);

@@ -51,7 +51,6 @@ static void safe(const std::string& source) {
         CHECK(run.violations.empty());
         CHECK(run.stopReason.empty());
     }
-    CHECK(printAsm(optimize(printAsm(result))) == printAsm(result));
 }
 
 static void dependencies_and_overlap() {
@@ -124,7 +123,7 @@ static void incoming_dma_overlap() {
 static void ready_wait_unlocks_critical_work() {
     std::string source = "addi x7, x0, 32\nlui x1, 1\naddi x2, x0, 1024\n"
                          "dma.load.ch0 x1, x0, x7\ndma.wait.ch0\nvload m6, 0(x2)\n"
-                         "delay 40\nvstore m6, 8(x0)\ndelay 40\n";
+                         "vstore m6, 8(x0)\n";
     for (int i = 0; i < 64; i++) source += "addi x9, x9, 1\n";
     source += "ecall\n";
     AsmProgram result = optimize(source);
@@ -214,7 +213,7 @@ static void correlated_branches() {
         // Manual waits use the same path proof.
         Code code = buildBlocks(parseAsm(guarded));
         PassContext ctx;
-        runPasses(code, {"strip-artifacts", "fill-delay-slots", "schedule"}, ctx);
+        runPasses(code, {"remove-nops", "fill-delay-slots", "schedule"}, ctx);
         CHECK(waits(flatten(code)) == 1);
     }
     // Prefetch reaches the loop-header wait, never the exit.
@@ -286,10 +285,9 @@ static void reject(const std::string& source, const std::vector<std::string>& pa
 
 static void preflight() {
     reject("dma.config.ch0 x0\n", {"insert-dma-waits"}, "schedule");
-    reject("delay 8\nauipc x1, 0\n", {}, "auipc");
-    reject("jal x0, end\ndma.config.ch0 x0\nend:\n", {"insert-dma-waits", "schedule"}, "strip-artifacts");
+    reject("auipc x1, 0\n", {}, "auipc");
     reject("dma.config.ch0 x0\natlas.complete 1, 0xC10\n",
-           {"strip-artifacts", "fill-delay-slots", "schedule"}, "pending DMA");
+           {"remove-nops", "fill-delay-slots", "schedule"}, "pending DMA");
 }
 
 int main() {

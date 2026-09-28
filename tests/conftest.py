@@ -39,7 +39,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--artifacts-dir",
         type=Path,
         default=None,
-        help="Keep each kernel's before.S/after.S here instead of a temp dir.",
+        help="Keep each kernel's original.S, functional.S and executable.S here instead of a temp dir.",
     )
 
 
@@ -51,7 +51,7 @@ def optimizer(pytestconfig: pytest.Config) -> harness.Optimizer:
     if choice is None:
         pytest.skip(
             "no optimizer: build atlas-opt to build/atlas-opt, or pass "
-            "--atlas-opt=<path|identity|strip-delays>"
+            "--atlas-opt=<path|identity>"
         )
     if choice in harness.BUILTIN_OPTIMIZERS:
         return harness.BUILTIN_OPTIMIZERS[choice]

@@ -6,9 +6,10 @@
 
 #include "core/asm.h"
 
-// A basic block. A taken branch or jump runs exactly one more instruction (its
-// delay slot) before the target, and that slot also runs when the branch is not
-// taken. So the slot is kept with its branch instead of with the next block.
+// A basic block. In functional assembly (the input) a branch takes effect at once.
+// In executable assembly (the output) a branch or jump runs one more instruction,
+// its delay slot, before the target; the slot also runs when the branch is not
+// taken. `slot` holds what the optimizer puts there (flatten() emits a nop if empty).
 struct Block {
     std::vector<std::string> labels;
     std::vector<Instr> body;
@@ -29,11 +30,11 @@ struct Code {
     std::vector<std::string> endLabels;  // labels placed after the last instruction
 };
 
-// Splits a flat program into basic blocks and computes successors.
+// Splits a functional-assembly program into basic blocks and computes successors.
 Code buildBlocks(const AsmProgram& prog);
 
-// Turns blocks back into a flat program. Scheduled blocks get `delay`
-// instructions for their idle cycles; others are emitted as they are.
+// Turns blocks into executable assembly: every branch gets its delay slot, and
+// scheduled blocks get `delay` instructions for their idle cycles.
 AsmProgram flatten(const Code& code);
 
 bool hasDelaySlot(const Block& b);  // block ends with a branch or jump

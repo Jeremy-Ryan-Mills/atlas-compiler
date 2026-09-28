@@ -55,14 +55,6 @@ unsigned requiredWaits(const Pending& pending, const Step& step, const std::vect
     return waits;
 }
 
-void validateFlow(const Code& code) {
-    requireKnownSuccessors(code, "insert-dma-waits");
-    for (const Block& block : code.blocks) {
-        if (block.slot && block.slot->op->engine == Engine::Dma && block.slot->op->opClass != OpClass::DmaWait)
-            throw std::runtime_error("line " + std::to_string(block.slot->line) +
-                                     ": insert-dma-waits requires strip-artifacts to move DMA commands out of delay slots");
-    }
-}
 
 // Add a CFG exit for end labels and final fallthrough.
 void addExit(Code& code) {
@@ -86,7 +78,7 @@ void addExit(Code& code) {
 }  // namespace
 
 void insertDmaWaits(Code& code, PassContext& ctx) {
-    validateFlow(code);
+    requireKnownSuccessors(code, "insert-dma-waits");
     if (code.blocks.empty()) {
         ctx.log.push_back("insert-dma-waits: inserted 0 waits");
         return;

@@ -15,7 +15,7 @@ static std::runtime_error scheduleError(const Instr& in, const std::string& why)
 }
 
 // Schedule one block. Fixed-latency engines drain between blocks; DMA uses waits.
-static void scheduleBlock(Block& block, const RegValues& entry, bool robustDma, bool lastBlock, bool fallthroughHalt, uint32_t dmaRegs, const IncomingDma* incomingDma) {
+static void scheduleBlock(Block& block, const RegValues& entry, bool robustDma, bool lastBlock, uint32_t dmaRegs, const IncomingDma* incomingDma) {
     std::vector<Instr> nodes = blockInstructions(block);
     int nb = (int)block.body.size(), n = (int)nodes.size();
     int term = block.terminator ? nb : -1;
@@ -41,7 +41,7 @@ static void scheduleBlock(Block& block, const RegValues& entry, bool robustDma, 
     auto release = [&](int i) { return channelRelease[nodes[i].op->channel]; };
 
     ReservationTable table;
-    int cycle = 0, placed = 0, nextFree = 0, lastPlaced = 0, lastBody = -1;
+    int cycle = 0, placed = 0, nextFree = 0, lastPlaced = 0;
     while (placed < nb) {
         // Among ready instructions that fit this cycle, take the one on the longest path.
         int best = -1, bestWait = -1;
@@ -106,7 +106,6 @@ static void scheduleBlock(Block& block, const RegValues& entry, bool robustDma, 
         }
         nextFree = cycle + naturalGap(nodes[best]);
         lastPlaced = cycle;
-        lastBody = best;
         cycle = nextFree;
         placed++;
     }
@@ -114,14 +113,11 @@ static void scheduleBlock(Block& block, const RegValues& entry, bool robustDma, 
     // Drain fixed-latency work before successors.
     int drain = 0;
     for (int i = 0; i < nb; i++) drain = std::max(drain, issue[i] + g.footprints[i].doneAge + 1);
-    // Kept delays need an extra guard cycle before halt, even across blocks.
-    bool keptDelay = lastBody >= 0 && nodes[lastBody].op->opClass == OpClass::Delay && nodes[lastBody].keep;
 
     if (term >= 0) {
         bool halt = nodes[term].op->opClass == OpClass::Halt;
         // With a delay slot, the next block starts two cycles after the branch.
         int t = std::max({nextFree, earliest[term], halt ? drain : drain - 2});
-        if (halt && keptDelay) t = std::max(t, nextFree + 1);
         if (slot >= 0) t = std::max(t, earliest[slot] - 1);
         while (!table.conflict(nodes[term], g.footprints[term], t).empty() ||
                (slot >= 0 && !table.conflict(nodes[slot], g.footprints[slot], t + 1).empty()))
@@ -130,7 +126,6 @@ static void scheduleBlock(Block& block, const RegValues& entry, bool robustDma, 
         block.endCycle = slot >= 0 ? t + 2 : t + 1;
     } else {
         block.endCycle = lastBlock ? nextFree : std::max(nextFree, drain);
-        if (fallthroughHalt && keptDelay) block.endCycle = std::max(block.endCycle, nextFree + 1);
     }
 
     std::vector<int> order(nb);
@@ -160,13 +155,7 @@ void schedule(Code& code, PassContext& ctx) {
     }
     for (size_t bi = 0; bi < code.blocks.size(); bi++) {
         try {
-            bool lastBlock = bi + 1 == code.blocks.size();
-            size_t next = bi + 1;
-            // Stripping can leave empty labeled blocks.
-            while (next < code.blocks.size() && code.blocks[next].body.empty() && !code.blocks[next].terminator) next++;
-            bool fallthroughHalt = next < code.blocks.size() && code.blocks[next].body.empty() &&
-                                   code.blocks[next].terminator && code.blocks[next].terminator->op->opClass == OpClass::Halt;
-            scheduleBlock(code.blocks[bi], entry[bi], ctx.robustDma, lastBlock, fallthroughHalt, dmaRegs,
+            scheduleBlock(code.blocks[bi], entry[bi], ctx.robustDma, bi + 1 == code.blocks.size(), dmaRegs,
                           knownFlow ? &incoming[bi] : nullptr);
         } catch (const std::runtime_error& e) {
             throw std::runtime_error("block " + std::to_string(bi) + ": " + e.what());

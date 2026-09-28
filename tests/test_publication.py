@@ -22,18 +22,20 @@ def publication_dir(request, tmp_path):
     root = request.config.getoption('artifacts_dir')
     path = tmp_path if root is None else Path(root) / re.sub(r'[^A-Za-z0-9_.-]', '_', request.node.name)
     path.mkdir(parents=True, exist_ok=True)
-    (path / 'after.S').unlink(missing_ok=True)
+    (path / 'executable.S').unlink(missing_ok=True)
     return path
 
 
 def compiler_input(source):
-    """Convert model completion writes (`csrrw(i) ... # atlas.complete`) to compiler input."""
-    return re.sub(
+    """Turn a test program written for npu_model (with `delay`s, and completions as
+    `csrrw(i) ... # atlas.complete`) into functional assembly for atlas-opt."""
+    source = re.sub(
         r'(?m)^([ \t]*)csrrw(i?)[ \t]+x0,[ \t]*x(\d+),[ \t]*([^\s#]+)'
         r'[ \t]*#[ \t]*atlas\.complete[ \t]*$',
         lambda m: f'{m[1]}atlas.complete {m[3] if m[2] else "x" + m[3]}, {m[4]}',
         source,
     )
+    return harness.strip_delays(source)
 
 
 @pytest.fixture
@@ -51,7 +53,7 @@ def publication_without_dma_insertion(publication_compiler, pytestconfig):
     command = shlex.split(pytestconfig.getoption('atlas_opt') or
                           str(harness.REPO_ROOT / 'build' / 'atlas-opt'))
     command += shlex.split(pytestconfig.getoption('atlas_opt_args'))
-    command += ['--passes', 'strip-artifacts,fill-delay-slots,schedule']
+    command += ['--passes', 'remove-nops,fill-delay-slots,schedule']
     compile_source = harness.external_optimizer(command)
     return lambda source, directory: compile_source(compiler_input(source), directory)
 
@@ -117,14 +119,14 @@ def observe(source, hardware_config_cls, directory, *, dma_scale=1, expected_dbg
 
 
 def assert_safe_publication(before, after):
+    # Only DRAM is observable at a completion; atlas-opt also finishes all earlier work.
     assert before['active_engines'] == (), 'safe reference published with work in flight'
     assert after['active_engines'] == (), 'optimized release published with work in flight'
-    for key in ['vmem', 'dram', 'mreg6', 'mreg8']:
-        assert after[key] == before[key], f'{key} differed at FIRST publication'
+    assert after['dram'] == before['dram'], 'DRAM differed at FIRST publication'
 
 
 def compare(source, compiler, hardware_config_cls, directory, *, dma_scale=1):
-    optimized = compiler(source, directory)
+    optimized = compiler(harness.strip_delays(source), directory)
     before = observe(source, hardware_config_cls, directory / 'reference', dma_scale=dma_scale)
     after = observe(optimized, hardware_config_cls, directory / 'optimized', dma_scale=dma_scale)
     assert_safe_publication(before, after)
@@ -136,9 +138,7 @@ def test_release_waits_for_vstore_at_first_publication(
     publication_compiler, hardware_config_cls, publication_dir, halt
 ):
     source = 'vstore m0, 0(x0)\ndelay 34\n' + PUBLISH + halt
-    _, before, after = compare(source, publication_compiler, hardware_config_cls, publication_dir)
-    assert before['vmem'][:1024] == bytes([0x31]) * 1024
-    assert after['vmem'][:1024] == bytes([0x31]) * 1024
+    compare(source, publication_compiler, hardware_config_cls, publication_dir)
 
 
 def test_release_waits_for_multiple_engines(
@@ -146,9 +146,7 @@ def test_release_waits_for_multiple_engines(
 ):
     source = ('vstore m0, 0(x0)\nvmov m8, m4\nvtrpose.xlu m6, m2\n'
               'delay 100\n' + PUBLISH)
-    _, before, after = compare(source, publication_compiler, hardware_config_cls, publication_dir)
-    assert before['mreg6'] == after['mreg6'] == bytes([0x7B]) * 1024
-    assert before['mreg8'] == after['mreg8'] == bytes([0x2A]) * 1024
+    compare(source, publication_compiler, hardware_config_cls, publication_dir)
 
 
 @pytest.mark.parametrize('dma_scale', [1, 10, 100])
@@ -158,10 +156,7 @@ def test_release_waits_for_dma_and_independent_vstore(
 ):
     source = ('addi x7, x0, 32\nlui x1, 1\ndma.load.ch0 x1, x0, x7\n'
               'vstore m0, 0(x0)\ndma.wait.ch0\ndelay 40\n' + label + PUBLISH)
-    _, before, after = compare(source, publication_compiler, hardware_config_cls, publication_dir,
-                               dma_scale=dma_scale)
-    assert before['vmem'][:1024] == after['vmem'][:1024] == bytes([0x31]) * 1024
-    assert before['vmem'][4096:4128] == after['vmem'][4096:4128] == bytes([0xC3]) * 32
+    compare(source, publication_compiler, hardware_config_cls, publication_dir, dma_scale=dma_scale)
 
 
 @pytest.mark.parametrize('wait', ['', 'dma.wait.ch1\n'])
@@ -172,14 +167,7 @@ def test_release_rejects_missing_or_wrong_dma_wait(
     source = 'addi x7, x0, 64\ndma.load.ch0 x0, x0, x7\n' + wait + label + PUBLISH
     with pytest.raises(harness.OptimizerError, match=r'(?i)(complete|dma|wait)'):
         publication_without_dma_insertion(source, publication_dir)
-    assert not (publication_dir / 'after.S').exists()
-
-
-def test_release_in_architectural_delay_slot_is_rejected(publication_compiler, publication_dir):
-    source = 'jal x0, target\n' + PUBLISH + 'target:\naddi x2, x0, 7\n'
-    with pytest.raises(harness.OptimizerError, match=r'(?i)(complete|slot)'):
-        publication_compiler(source, publication_dir)
-    assert not (publication_dir / 'after.S').exists()
+    assert not (publication_dir / 'executable.S').exists()
 
 
 def test_release_marker_survives_reoptimization(
@@ -190,11 +178,11 @@ def test_release_marker_survives_reoptimization(
     assert first.count('atlas.complete') == 1
     repeat = publication_dir / 'repeat'
     repeat.mkdir(exist_ok=True)
-    second = publication_compiler(first, repeat)
+    # Converting the output back to functional assembly and optimizing again gives it back.
+    second = publication_compiler(harness.to_functional(first), repeat)
     assert second == first
     observed = observe(second, hardware_config_cls, repeat / 'model')
     assert observed['active_engines'] == ()
-    assert observed['vmem'][:1024] == bytes([0x31]) * 1024
 
 
 def test_unmarked_progress_marker_remains_immediate(
@@ -206,7 +194,6 @@ def test_unmarked_progress_marker_remains_immediate(
     assert 'atlas.complete' not in optimized
     assert observed['cycle'] == 3
     assert observed['active_engines'] == ('LSU',)
-    assert observed['vmem'][:1024] == bytes(1024)
 
 
 @pytest.mark.parametrize('delay,cycle,written,active', [(32, 36, 992, ('LSU',)), (33, 37, 1024, ())])

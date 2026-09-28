@@ -311,7 +311,6 @@ AsmProgram parseAsm(const std::string& text, const std::string& fileName, bool a
                 Instr& in = produced[i];
                 in.line = lineNo;
                 if (i == 0) in.comment = comment;
-                in.keep = in.op->opClass == OpClass::Delay && comment.find("keep") != std::string::npos;
                 in.release = release;
                 if (in.release && in.op->opClass != OpClass::Csr)
                     throw ParseError("atlas.complete is only valid on a CSR instruction");
@@ -346,12 +345,40 @@ AsmProgram parseAsm(const std::string& text, const std::string& fileName, bool a
     return prog;
 }
 
-AsmProgram readAsmFile(const std::string& path, bool allowOutputAnnotations) {
+std::string versionHeader(AsmKind kind) {
+    return std::string("# atlas-") + (kind == AsmKind::Functional ? "fs " : "es ") + std::to_string(kAssemblyVersion) + "\n";
+}
+
+void checkVersionHeader(const std::string& text, AsmKind kind, const std::string& fileName) {
+    std::istringstream lines(text);
+    int lineNo = 0;
+    for (std::string line; std::getline(lines, line);) {
+        lineNo++;
+        if (trim(line).empty()) continue;
+        std::istringstream words(line);
+        std::string hash, tag, version;
+        words >> hash >> tag >> version;
+        if (hash != "#" || (tag != "atlas-fs" && tag != "atlas-es")) return;  // no header
+        std::string where = fileName + ":" + std::to_string(lineNo) + ": ";
+        bool functional = tag == "atlas-fs";
+        if (functional != (kind == AsmKind::Functional))
+            throw ParseError(where + "`# " + tag + "` marks " + (functional ? "functional" : "executable") +
+                             " assembly, but " + (kind == AsmKind::Functional ? "functional" : "executable") +
+                             " assembly was expected");
+        if (version != std::to_string(kAssemblyVersion))
+            throw ParseError(where + "`# " + tag + " " + version + "` is for another contract version; " +
+                             "this atlas-opt reads version " + std::to_string(kAssemblyVersion));
+        return;
+    }
+}
+
+AsmProgram readAsmFile(const std::string& path, AsmKind kind) {
     std::ifstream f(path);
     if (!f) throw ParseError("cannot open " + path);
     std::stringstream ss;
     ss << f.rdbuf();
-    return parseAsm(ss.str(), path, allowOutputAnnotations);
+    checkVersionHeader(ss.str(), kind, path);
+    return parseAsm(ss.str(), path, kind == AsmKind::Executable);
 }
 
 std::string formatInstr(const Instr& in) {

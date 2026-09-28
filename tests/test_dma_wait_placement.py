@@ -4,8 +4,10 @@ import json
 
 import pytest
 
-from tests.test_dma_wait_insertion import compare_repaired
+from tests.test_dma_wait_insertion import RESULT, compare_repaired, registers_to_dram, to_dram, word
 from tests.test_publication import publication_compiler, publication_dir
+
+COMPLETE = 'csrrwi x0, x1, 0xC10 # atlas.complete\n'
 
 
 @pytest.mark.parametrize('dma_scale', [0.1, 1, 10, 100])
@@ -21,10 +23,9 @@ def test_ready_wait_unlocks_vector_work_before_scalar_tail(
     )
     if incoming:
         source = source.replace('dma.load.ch0', 'dma.config.ch0 x0\nnext:\ndma.wait.ch0\ndma.load.ch0')
-    optimized, result = compare_repaired(
+    optimized, _ = compare_repaired(
         source, source, publication_compiler, hardware_config_cls, publication_dir, dma_scale=dma_scale,
     )
-    assert result['xrf'][9] == 64
     assert optimized.index('dma.wait.ch0') < optimized.rindex('addi x9')
     if dma_scale == 1:
         cycles = json.loads((publication_dir / 'optimized' / 'result.json').read_text())['cycles']
@@ -38,16 +39,17 @@ def test_incoming_transfer_overlaps_independent_store(
     publication_compiler, hardware_config_cls, publication_dir, dma_scale, boundary, explicit,
 ):
     setup = 'addi x7, x0, 64\nlui x1, 1\ndma.load.ch0 x1, x0, x7\n' + boundary
-    tail = 'vstore m0, 0(x0)\ndelay 40\nlw x2, 0(x1)\ndelay 4\nnop\necall\n'
-    source = setup + ('dma.wait.ch0\n' if explicit else '') + tail
-    reference = setup + 'dma.wait.ch0\n' + tail
+    work = 'vstore m0, 0(x0)\ndelay 40\nlw x2, 0(x1)\ndelay 4\nnop\n'
+    copy = lambda wait: to_dram(0, 32, wait=wait) + to_dram(4096, 64, 32, wait=wait)
+    source = setup + ('dma.wait.ch0\n' if explicit else '') + work + copy(False) + 'ecall\n'
+    reference = setup + 'dma.wait.ch0\n' + work + copy(True) + 'ecall\n'
     optimized, result = compare_repaired(
         source, reference, publication_compiler, hardware_config_cls, publication_dir, dma_scale=dma_scale,
     )
     assert optimized.count('dma.wait.ch0') == 1
     assert optimized.index('vstore') < optimized.index('dma.wait.ch0') < optimized.index('lw ')
-    assert result['vmem'][:1024] == bytes([0x31]) * 1024
-    assert result['vmem'][4096:4160] == bytes([0xC3]) * 64
+    assert result['dram'][RESULT:RESULT + 32] == bytes([0x31]) * 32
+    assert result['dram'][RESULT + 32:RESULT + 96] == bytes([0xC3]) * 64
     before = json.loads((publication_dir / 'reference' / 'result.json').read_text())['cycles']
     after = json.loads((publication_dir / 'optimized' / 'result.json').read_text())['cycles']
     if dma_scale >= 1:
@@ -61,19 +63,20 @@ def test_incoming_transfer_overlaps_independent_store(
 def test_same_guard_needs_no_join_wait(
     publication_compiler, hardware_config_cls, publication_dir, dma_scale, value, first, second,
 ):
-    source = (
+    guarded = (
         f'addi x10, x0, {value}\naddi x11, x0, 4\naddi x7, x0, 32\nlui x1, 1\n'
         f'{first} x10, x11, skip\nnop\ndma.load.ch0 x1, x0, x7\n'
         f'skip:\n{second} x10, x11, done\nnop\ndma.wait.ch0\n'
-        'done:\ncsrrwi x0, x1, 0xC10 # atlas.complete\necall\n'
     )
-    reference = source.replace('done:\n', 'done:\ndma.wait.ch0\n')
+    copy = lambda wait: to_dram(4096, 32, wait=wait)
+    source = guarded + 'done:\n' + COMPLETE + copy(False) + 'ecall\n'
+    reference = guarded + 'done:\ndma.wait.ch0\n' + COMPLETE + copy(True) + 'ecall\n'
     optimized, result = compare_repaired(
         source, reference, publication_compiler, hardware_config_cls, publication_dir, dma_scale=dma_scale,
     )
     assert optimized.count('dma.wait.ch0') == 1
     if value == 0:
-        assert result['vmem'][4096:4128] == bytes([0xC3]) * 32
+        assert result['dram'][RESULT:RESULT + 32] == bytes([0xC3]) * 32
 
 
 @pytest.mark.parametrize('dma_scale', [1, 100])
@@ -81,40 +84,41 @@ def test_same_guard_needs_no_join_wait(
 def test_prefetch_only_reaches_waited_backedge(
     publication_compiler, hardware_config_cls, publication_dir, dma_scale, trips,
 ):
-    source = (
+    loop = (
         f'addi x10, x0, 0\naddi x11, x0, {trips}\naddi x7, x0, 32\nlui x1, 1\n'
         'dma.load.ch0 x1, x0, x7\nloop:\ndma.wait.ch0\n'
         'addi x10, x10, 1\nbge x10, x11, skip\nnop\ndma.load.ch0 x1, x0, x7\n'
         'skip:\nblt x10, x11, loop\nnop\n'
-        'csrrwi x0, x1, 0xC10 # atlas.complete\necall\n'
     )
-    reference = source.replace('csrrwi', 'dma.wait.ch0\ncsrrwi')
+    copy = lambda wait: registers_to_dram(10, wait=wait) + to_dram(4096, 32, 32, wait=wait)
+    source = loop + COMPLETE + copy(False) + 'ecall\n'
+    reference = loop + 'dma.wait.ch0\n' + COMPLETE + copy(True) + 'ecall\n'
     optimized, result = compare_repaired(
         source, reference, publication_compiler, hardware_config_cls, publication_dir, dma_scale=dma_scale,
     )
     assert optimized.count('dma.wait.ch0') == 1
-    assert result['xrf'][10] == trips
-    assert result['vmem'][4096:4128] == bytes([0xC3]) * 32
+    assert result['dram'][RESULT:RESULT + 4] == word(trips)
+    assert result['dram'][RESULT + 32:RESULT + 64] == bytes([0xC3]) * 32
 
 
 @pytest.mark.parametrize('dma_scale', [1, 100])
-@pytest.mark.parametrize('mutation', ['body', 'slot', 'signedness'])
+@pytest.mark.parametrize('mutation', ['body', 'signedness'])
 def test_different_guard_still_requires_completion_wait(
     publication_compiler, hardware_config_cls, publication_dir, dma_scale, mutation,
 ):
-    slot = 'addi x10, x0, 3' if mutation == 'slot' else 'nop'
     body = 'addi x10, x0, 3\n' if mutation == 'body' else ''
     value = -1 if mutation == 'signedness' else 0
     second = 'bgeu' if mutation == 'signedness' else 'bge'
-    source = (
+    guarded = (
         f'addi x10, x0, {value}\naddi x11, x0, 3\naddi x7, x0, 32\nlui x1, 1\n'
-        f'bge x10, x11, skip\n{slot}\ndma.load.ch0 x1, x0, x7\n'
+        f'bge x10, x11, skip\nnop\ndma.load.ch0 x1, x0, x7\n'
         f'skip:\n{body}{second} x10, x11, done\nnop\ndma.wait.ch0\n'
-        'done:\ncsrrwi x0, x1, 0xC10 # atlas.complete\necall\n'
     )
-    reference = source.replace('done:\n', 'done:\ndma.wait.ch0\n')
+    copy = lambda wait: to_dram(4096, 32, wait=wait)
+    source = guarded + 'done:\n' + COMPLETE + copy(False) + 'ecall\n'
+    reference = guarded + 'done:\ndma.wait.ch0\n' + COMPLETE + copy(True) + 'ecall\n'
     optimized, result = compare_repaired(
         source, reference, publication_compiler, hardware_config_cls, publication_dir, dma_scale=dma_scale,
     )
     assert optimized.count('dma.wait.ch0') == 2
-    assert result['vmem'][4096:4128] == bytes([0xC3]) * 32
+    assert result['dram'][RESULT:RESULT + 32] == bytes([0xC3]) * 32

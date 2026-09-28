@@ -10,13 +10,14 @@
 
 static void usage() {
     std::cerr << "usage: atlas-opt [options] input.S\n"
-                 "  -o FILE            write the optimized program to FILE (default: stdout)\n"
-                 "  --viz FILE.html    write the before/after dependency graph viewer\n"
+                 "Turns functional assembly (no delays, no branch delay slots) into executable assembly.\n"
+                 "  -o FILE            write the executable assembly to FILE (default: stdout)\n"
+                 "  --viz FILE.html    write the dependency graph viewer (input order vs. schedule)\n"
                  "  --passes a,b,c     run only these passes (default: all; see --list-passes)\n"
                  "  --list-passes      list the passes in the order they run\n"
                  "  --dma-timing MODE  robust (default): valid for any DMA latency;\n"
                  "                     model: trust npu_model's DMA latency\n"
-                 "  --check            only simulate the input and report problems\n"
+                 "  --check            only simulate the input as executable assembly and report problems\n"
                  "  -q                 print nothing unless something is wrong\n";
 }
 
@@ -63,44 +64,46 @@ int main(int argc, char** argv) {
     }
 
     try {
-        AsmProgram original = readAsmFile(input, checkOnly);
-        SimResult before = simulate(original);
         if (checkOnly) {
-            std::cout << input << ": " << before.cycles << " cycles, " << before.issued << " instructions issued ("
-                      << before.delays << " delays)\n";
-            printProblems("input", before);
-            return before.violations.empty() && before.stopReason.empty() ? 0 : 1;
+            // Executable assembly, e.g. atlas-opt's output (which tags completions `# atlas.complete`).
+            AsmProgram executable = readAsmFile(input, AsmKind::Executable);
+            SimResult r = simulate(executable);
+            std::cout << input << ": " << r.cycles << " cycles, " << r.issued << " instructions issued (" << r.delays
+                      << " delays)\n";
+            printProblems("input", r);
+            return r.violations.empty() && r.stopReason.empty() ? 0 : 1;
         }
 
-        Code code = buildBlocks(original);
+        AsmProgram functional = readAsmFile(input);
+        Code code = buildBlocks(functional);
         runPasses(code, passNames, ctx);
-        AsmProgram optimized = flatten(code);
+        AsmProgram executable = flatten(code);
 
         // Check the result, and (for robust schedules) that it still holds when DMA is slower than modeled.
-        SimResult after = simulate(optimized);
+        SimResult result = simulate(executable);
         SimOptions slowDma;
         slowDma.dmaLatencyScale = 1.7;
-        SimResult afterSlow = ctx.robustDma ? simulate(optimized, slowDma) : after;
+        SimResult slow = ctx.robustDma ? simulate(executable, slowDma) : result;
 
+        std::string text = versionHeader(AsmKind::Executable) + printAsm(executable);
         if (!output.empty()) {
-            if (!writeFile(output, printAsm(optimized))) return 1;
+            if (!writeFile(output, text)) return 1;
         } else if (vizPath.empty()) {
-            std::cout << printAsm(optimized);
+            std::cout << text;
         }
-        if (!vizPath.empty() && !writeFile(vizPath, renderHtml(buildProgramView(input, original, code, before, after))))
+        if (!vizPath.empty() && !writeFile(vizPath, renderHtml(buildProgramView(input, functional, code, result))))
             return 1;
 
-        bool bad = !after.violations.empty() || !after.stopReason.empty() || !afterSlow.violations.empty();
+        bool bad = !result.violations.empty() || !result.stopReason.empty() || !slow.violations.empty();
         if (!quiet || bad) {
             for (const std::string& line : ctx.log) std::cerr << "  " << line << "\n";
             char buf[512];
-            std::snprintf(buf, sizeof buf, "%s: %lld -> %lld cycles (%.2fx), %lld -> %lld instructions issued\n",
-                          input.c_str(), before.cycles, after.cycles, (double)before.cycles / std::max(1LL, after.cycles),
-                          before.issued, after.issued);
+            std::snprintf(buf, sizeof buf, "%s: %zu instructions -> %lld cycles (%lld issued, %lld of them delays)\n",
+                          input.c_str(), functional.instrs.size(), result.cycles, result.issued, result.delays);
             std::cerr << buf;
         }
-        printProblems("output", after);
-        if (ctx.robustDma) printProblems("output with slower DMA", afterSlow);
+        printProblems("output", result);
+        if (ctx.robustDma) printProblems("output with slower DMA", slow);
         return bad ? 1 : 0;
     } catch (const std::exception& e) {
         std::cerr << "atlas-opt: " << e.what() << "\n";

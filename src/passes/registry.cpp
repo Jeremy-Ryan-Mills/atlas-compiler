@@ -62,7 +62,7 @@ const std::vector<Pass>& allPasses() {
     // Add new passes here. `schedule` must stay last: it picks the issue cycles
     // and delays for whatever the earlier passes produced.
     static const std::vector<Pass> passes = {
-        {"strip-artifacts", "remove the old schedule: delays and no-op fillers", stripArtifacts},
+        {"remove-nops", "drop instructions that have no effect (writes to x0)", removeNops},
         {"insert-dma-waits", "insert DMA waits before dependent accesses, channel reuse, and completion", insertDmaWaits},
         {"fill-delay-slots", "move an independent scalar instruction into each empty branch delay slot", fillDelaySlots},
         {"schedule", "list-schedule every block and choose the delays", schedule},
@@ -71,45 +71,29 @@ const std::vector<Pass>& allPasses() {
 }
 
 void runPasses(Code& code, const std::vector<std::string>& names, PassContext& ctx) {
-    bool stripsArtifacts = names.empty(), insertsDmaWaits = names.empty(), schedules = names.empty(), hasRelease = false;
+    bool insertsDmaWaits = names.empty(), schedules = names.empty(), hasRelease = false;
     int firstReleaseLine = 0;
     for (const std::string& name : names) {
-        stripsArtifacts |= name == "strip-artifacts";
         insertsDmaWaits |= name == "insert-dma-waits";
         schedules |= name == "schedule";
     }
+    // The input must be functional assembly, and passes move code, so nothing may
+    // depend on an instruction's address.
     for (const Block& block : code.blocks)
         visitInstructions(block, [&](const Instr& in) {
+            std::string reason;
+            if (in.op->opClass == OpClass::Delay)
+                reason = "the input must be functional assembly, without delays (convert hand-scheduled code with scripts/to_functional.py)";
+            else if (in.op->name == "auipc")
+                reason = "auipc is not supported by the optimizer (PC-relative values cannot be relocated)";
+            else if (in.op->name == "jalr")
+                reason = "jalr is not supported by the optimizer (indirect targets cannot be relocated)";
+            else if (in.op->name == "jal" && in.rd != 0)
+                reason = "jal with a nonzero link register is not supported by the optimizer (link values cannot be relocated)";
+            if (!reason.empty()) throw std::runtime_error("line " + std::to_string(in.line) + ": " + reason);
             if (in.release && !hasRelease) firstReleaseLine = in.line;
             hasRelease |= in.release;
         });
-    // Reject unrelocatable addresses before any pass mutates the program.
-    auto validate = [](const Instr& in) {
-        std::string reason;
-        if (in.op->name == "auipc")
-            reason = "auipc is not supported by the optimizer (PC-relative values cannot be relocated)";
-        else if (in.op->name == "jalr")
-            reason = "jalr is not supported by the optimizer (indirect targets cannot be relocated)";
-        else if (in.op->name == "jal" && in.rd != 0)
-            reason = "jal with a nonzero link register is not supported by the optimizer (link values cannot be relocated)";
-        if (!reason.empty()) throw std::runtime_error("line " + std::to_string(in.line) + ": " + reason);
-    };
-    for (const Block& b : code.blocks) {
-        for (const Instr& in : b.body) validate(in);
-        if (b.terminator) validate(*b.terminator);
-        if (b.slot) {
-            validate(*b.slot);
-            OpClass slotClass = b.slot->op->opClass;
-            // Only stripped delays are safe in branch slots.
-            bool retainedDelay = slotClass == OpClass::Delay && (b.slot->keep || !stripsArtifacts);
-            if (retainedDelay || slotClass == OpClass::Halt)
-                throw std::runtime_error("line " + std::to_string(b.slot->line) + ": " + b.slot->op->name +
-                                         " in a delay slot is not supported by the optimizer");
-            if (insertsDmaWaits && !stripsArtifacts && b.slot->op->engine == Engine::Dma && slotClass != OpClass::DmaWait)
-                throw std::runtime_error("line " + std::to_string(b.slot->line) +
-                                         ": insert-dma-waits requires strip-artifacts to move DMA commands out of delay slots");
-        }
-    }
     if (insertsDmaWaits) requireKnownSuccessors(code, "insert-dma-waits");
     for (const std::string& name : names) {
         bool known = false;
