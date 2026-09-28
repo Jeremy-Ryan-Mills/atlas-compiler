@@ -8,7 +8,10 @@
 // Settings and results shared by the passes of one run.
 struct PassContext {
     bool robustDma = true;         // never assume when a dma.wait releases (.agents/OPEN_QUESTIONS.md #1)
-    std::string scheduler = "list";  // schedule strategy, "name" or "name:effort" (see schedule.cpp)
+    std::string renameClasses = "m,xmxu";  // register classes rename-registers may rename (see rename_registers.cpp)
+    std::string scheduler = "list";
+    bool criticalWaits = true;       // schedule: let a critical dma.wait beat lower-priority work
+    bool dmaQueueHeights = true;     // schedule: priorities count the DMA queue (transfers run in order)  // schedule strategy, "name" or "name:effort" (see schedule.cpp)
     std::vector<std::string> log;  // each pass adds a line describing what it did
 };
 
@@ -27,5 +30,6 @@ void runPasses(Code& code, const std::vector<std::string>& names, PassContext& c
 
 // The passes (one .cpp file each).
 void stripArtifacts(Code& code, PassContext& ctx);
+void renameRegisters(Code& code, PassContext& ctx);
 void fillDelaySlots(Code& code, PassContext& ctx);
 void schedule(Code& code, PassContext& ctx);

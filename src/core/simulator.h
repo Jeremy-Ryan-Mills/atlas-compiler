@@ -15,6 +15,7 @@ struct SimResult {
     long long cycles = 0;       // matches npu_model's cycle count for the same program
     long long issued = 0;       // issued instructions, including delays but not halt
     long long delays = 0;       // dynamic `delay` instructions
+    long long dmaBusy = 0;      // cycles the DMA engine spends transferring (one transfer at a time)
     std::vector<std::string> violations;          // broken dependences or hardware rules
     std::string stopReason;                       // empty when the program ran to its end
 };

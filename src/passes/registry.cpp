@@ -94,6 +94,7 @@ const std::vector<Pass>& allPasses() {
     // and delays for whatever the earlier passes produced.
     static const std::vector<Pass> passes = {
         {"strip-artifacts", "remove the old schedule: delays and no-op fillers", stripArtifacts},
+        {"rename-registers", "give values that live inside one block the longest-idle register (breaks false dependences)", renameRegisters},
         {"fill-delay-slots", "move an independent scalar instruction into each empty branch delay slot", fillDelaySlots},
         {"schedule", "list-schedule every block and choose the delays", schedule},
     };

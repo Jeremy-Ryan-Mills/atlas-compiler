@@ -31,6 +31,7 @@ struct Problem {
     int nb = 0, n = 0, term = -1, slot = -1;
     std::vector<int> height;
     bool robustDma = true, lastBlock = false, fallthroughHalt = false;
+    bool criticalWaits = false;  // a wait whose transfer should be done may beat lower-priority work
 };
 
 struct Schedule {
@@ -88,7 +89,11 @@ public:
             bool waitAllowed = bestWait >= 0 && (pr.waits == WaitPolicy::Eager  ? true
                                                  : pr.waits == WaitPolicy::Lazy ? !otherWork
                                                                                 : !otherWork || cycle_ >= release(bestWait));
-            if (best < 0 && waitAllowed) {
+            // With criticalWaits, a wait that gates more critical work than `best` goes first
+            // once its transfer (started in this block) is expected to be done.
+            bool critical = p.criticalWaits && waitAllowed && best >= 0 && release(bestWait) > 0 &&
+                            cycle_ >= release(bestWait) && prio[bestWait] > prio[best];
+            if ((best < 0 || critical) && waitAllowed) {
                 // Idle cycles before a wait overlap the transfer; idle cycles after it do not.
                 // So issue the wait just before its most critical waiting instruction can go.
                 int firstUse = INT_MAX, critical = -1;
@@ -399,6 +404,31 @@ Schedule solve(const Problem& p, const Options& o) {
     throw std::runtime_error("unknown scheduler '" + o.strategy + "'");
 }
 
+// criticalHeights, but transfers run one at a time in queue order: a DMA command can
+// only complete after every earlier one, so the queue-order edge counts the earlier
+// transfer's time. That puts the work feeding the first transfers ahead of everything.
+std::vector<int> dmaQueueHeights(const DepGraph& g) {
+    int n = (int)g.nodes.size();
+    std::vector<int> height(n, 0);
+    auto transfer = [&](int i) {
+        const OpInfo& op = *g.nodes[i].op;
+        return op.engine == Engine::Dma && op.opClass != OpClass::DmaWait;
+    };
+    for (int i = n - 1; i >= 0; i--) {
+        height[i] = g.footprints[i].doneAge + 1;
+        for (int e : g.out[i]) {
+            const Edge& ed = g.edges[e];
+            int d = ed.distance;
+            const Instr& to = g.nodes[ed.to];
+            if (to.op->opClass == OpClass::DmaWait && to.op->channel == g.nodes[i].op->channel)
+                d = std::max(d, g.footprints[i].dmaCycles + 2);
+            if (transfer(i) && transfer(ed.to)) d = std::max(d, g.footprints[i].dmaCycles);
+            height[i] = std::max(height[i], d + height[ed.to]);
+        }
+    }
+    return height;
+}
+
 // Critical path, and the DMA queue: transfers run one at a time in issue order.
 long long lowerBound(const Problem& p) {
     long long lb = 0, queue = 0;
@@ -418,7 +448,7 @@ long long lowerBound(const Problem& p) {
 // Reorders and times one block. The block may assume an idle machine on entry and
 // drains (everything it started finishes) before its successors begin.
 void scheduleBlock(Block& block, const RegValues& entry, bool robustDma, bool lastBlock, bool fallthroughHalt,
-                   uint32_t dmaRegs, const Options& opt, int blockIndex) {
+                   uint32_t dmaRegs, const Options& opt, int blockIndex, bool criticalWaits, bool dmaAwareHeights) {
     Problem p;
     p.nodes = blockInstructions(block);
     p.nb = (int)block.body.size();
@@ -428,6 +458,7 @@ void scheduleBlock(Block& block, const RegValues& entry, bool robustDma, bool la
     p.robustDma = robustDma;
     p.lastBlock = lastBlock;
     p.fallthroughHalt = fallthroughHalt;
+    p.criticalWaits = criticalWaits;
 
     p.g = buildGraph(p.nodes, entry, dmaRegs);
     for (int i = 0; i < p.n; i++) {
@@ -437,7 +468,7 @@ void scheduleBlock(Block& block, const RegValues& entry, bool robustDma, bool la
     }
     if (p.slot >= 0 && p.g.footprints[p.slot].doneAge > 0)
         throw scheduleError(p.nodes[p.slot], "only single-cycle scalar instructions are supported in a delay slot");
-    p.height = criticalHeights(p.g);
+    p.height = dmaAwareHeights ? dmaQueueHeights(p.g) : criticalHeights(p.g);
 
     auto start = std::chrono::steady_clock::now();
     Schedule s = solve(p, opt);
@@ -484,7 +515,8 @@ void schedule(Code& code, PassContext& ctx) {
             while (next < code.blocks.size() && code.blocks[next].body.empty() && !code.blocks[next].terminator) next++;
             bool fallthroughHalt = next < code.blocks.size() && code.blocks[next].body.empty() &&
                                    code.blocks[next].terminator && code.blocks[next].terminator->op->opClass == OpClass::Halt;
-            scheduleBlock(code.blocks[bi], entry[bi], ctx.robustDma, lastBlock, fallthroughHalt, dmaRegs, opt, (int)bi);
+            scheduleBlock(code.blocks[bi], entry[bi], ctx.robustDma, lastBlock, fallthroughHalt, dmaRegs, opt, (int)bi,
+                          ctx.criticalWaits, ctx.dmaQueueHeights);
         } catch (const std::runtime_error& e) {
             throw std::runtime_error("block " + std::to_string(bi) + ": " + e.what());
         }

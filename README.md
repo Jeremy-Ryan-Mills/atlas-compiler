@@ -20,6 +20,9 @@ Initialize `third_party/atlas-npu` separately for RTL reference.
 | `-o FILE` | write the optimized program (otherwise it is printed) |
 | `--viz FILE.html` | before/after dependency graph viewer (open it in a browser) |
 | `--passes a,b,c` / `--list-passes` | run only some passes / list them |
+| `--rename CLASSES` | registers `rename-registers` may rename: `x`, `m`, `mxu`, `xmxu`, `all` or `none` (default `m,xmxu`) |
+| `--scheduler NAME[:N]` | block scheduling strategy: `list` (default), `portfolio`, `grasp`, `anneal`, `rollout` |
+| `--no-critical-waits` / `--no-dma-queue-heights` | turn off the DMA-aware wait rule / priorities (`--rename none` plus both flags reproduces main) |
 | `--check` | only simulate the input: cycle count and any broken timing rules |
 | `--dma-timing model` | trust npu_model's DMA latency instead of staying valid for any latency |
 

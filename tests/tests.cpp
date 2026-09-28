@@ -349,6 +349,85 @@ TEST(halt_guards_cover_block_boundaries_kept_delays_and_long_waits) {
     CHECK_EQ(simulate(flatten(labeled)).cycles, 104);
 }
 
+// Runs strip-artifacts, rename-registers (with `classes`) and schedule.
+static AsmProgram renamed(const std::string& text, const std::string& classes) {
+    Code code = buildBlocks(parseAsm(text));
+    PassContext ctx;
+    ctx.renameClasses = classes;
+    runPasses(code, {"strip-artifacts", "rename-registers", "schedule"}, ctx);
+    return flatten(code);
+}
+
+static const Instr* findInstr(const AsmProgram& p, const std::string& name, int nth = 0) {
+    for (const Instr& in : p.instrs)
+        if (in.op->name == name && nth-- == 0) return &in;
+    return nullptr;
+}
+
+TEST(rename_breaks_false_dependences_on_vector_registers) {
+    // The second vli.all reuses m0 while vexp still reads it.
+    std::string text = "vli.all m0, 1\nvexp.bf16 m2, m0\nvli.all m0, 2\nvexp2.bf16 m4, m0\n";
+    AsmProgram plain = renamed(text, "none"), out = renamed(text, "m");
+    const Instr* first = findInstr(out, "vli.all", 0);
+    const Instr* second = findInstr(out, "vli.all", 1);
+    CHECK(first && second && first->rd != second->rd);
+    CHECK(first && second && first->rd % 2 == 0 && second->rd % 2 == 0);  // BF16 pairs stay even
+    CHECK(simulate(out).violations.empty());
+    CHECK(simulate(out).cycles < simulate(plain).cycles);
+}
+
+TEST(rename_keeps_registers_live_across_blocks) {
+    AsmProgram out = renamed(
+        "vli.all m4, 0\naddi x1, x0, 0\naddi x2, x0, 2\n"
+        "loop:\nvadd.bf16 m6, m4, m4\nvmov m4, m6\naddi x1, x1, 1\nblt x1, x2, loop\nnop\n",
+        "all");
+    const Instr* add = findInstr(out, "vadd.bf16");
+    const Instr* mov = findInstr(out, "vmov");
+    CHECK(add && add->rs1 == 4 && add->rs2 == 4);  // loop-carried value read on entry
+    CHECK(mov && mov->rd == 4);                    // and written for the next iteration
+    CHECK(mov && add && mov->rs1 == add->rd);
+    CHECK(simulate(out).violations.empty());
+}
+
+TEST(rename_leaves_dma_operand_registers_alone) {
+    // DMA reads x1..x3 when the transfer completes, so they are never renamed.
+    std::string text =
+        "addi x1, x0, 0\naddi x2, x0, 0\naddi x3, x0, 1024\ndma.load.ch0 x1, x2, x3\ndma.wait.ch0\n"
+        "addi x1, x0, 1024\nsrli x5, x1, 2\nvload m0, 0(x5)\nsrli x5, x1, 2\nvload m1, 0(x5)\n";
+    AsmProgram out = renamed(text, "x");
+    const Instr* load = findInstr(out, "dma.load.ch0");
+    CHECK(load && load->rd == 1 && load->rs1 == 2 && load->rs2 == 3);
+    const Instr* a = findInstr(out, "vload", 0);
+    const Instr* b = findInstr(out, "vload", 1);
+    CHECK(a && b && a->rs1 != b->rs1);  // the shared x5 temporary is split
+    CHECK(simulate(out).violations.empty());
+}
+
+TEST(rename_moves_only_push_pop_accumulators_to_the_other_mxu) {
+    // acc0 holds a matmul result across two quantizes that share acc1.
+    std::string text =
+        "vmatpush.weight.mxu0 w0, m8\nvmatmul.mxu0 acc0, m9, w0\n"
+        "vmatpush.acc.bf16.mxu0 acc1, m10\nvmatpop.fp8.acc.mxu0 m2, acc1, e0\n"
+        "vmatpush.acc.bf16.mxu0 acc1, m12\nvmatpop.fp8.acc.mxu0 m3, acc1, e0\n"
+        "vmatpop.bf16.acc.mxu0 m6, acc0\n";
+    AsmProgram out = renamed(text, "xmxu");
+    // Matmuls round differently per MXU, so the matmul and its pop stay on MXU0.
+    const Instr* matmul = findInstr(out, "vmatmul.mxu0");
+    const Instr* result = findInstr(out, "vmatpop.bf16.acc.mxu0");
+    CHECK(matmul && result && matmul->rd == result->rs2);
+    // The second quantize moves to MXU1, and each push is popped from the same accumulator.
+    CHECK(findInstr(out, "vmatpush.acc.bf16.mxu1") != nullptr);
+    for (int mxu = 0; mxu < 2; mxu++) {
+        std::string s = std::to_string(mxu);
+        const Instr* push = findInstr(out, "vmatpush.acc.bf16.mxu" + s);
+        const Instr* pop = findInstr(out, "vmatpop.fp8.acc.mxu" + s);
+        CHECK((push == nullptr) == (pop == nullptr));
+        if (push && pop) CHECK_EQ(push->rd, pop->rs2);
+    }
+    CHECK(simulate(out).violations.empty());
+    CHECK(simulate(out).cycles < simulate(renamed(text, "mxu")).cycles);
+}
+
 TEST(all_rtl_match_kernels) {
     std::filesystem::path dir = std::filesystem::path(ATLAS_SOURCE_DIR) / "third_party/npu_model/npu_model/configs/programs/asm";
     if (!std::filesystem::exists(dir)) {

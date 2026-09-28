@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -18,6 +19,10 @@ static void usage() {
                  "                     model: trust npu_model's DMA latency\n"
                  "  --scheduler NAME   list (default), portfolio, grasp, anneal, rollout;\n"
                  "                     NAME:N sets the search effort (iterations or rollout width)\n"
+                 "  --rename CLASSES   registers rename-registers may rename: any of x, m, mxu, xmxu,\n"
+                 "                     or all / none (default m,xmxu)\n"
+                 "  --no-critical-waits    only issue a dma.wait when nothing else fits (main's rule)\n"
+                 "  --no-dma-queue-heights priorities ignore that DMA transfers run one at a time\n"
                  "  --check            only simulate the input and report problems\n"
                  "  -q                 print nothing unless something is wrong\n";
 }
@@ -49,6 +54,11 @@ int main(int argc, char** argv) {
             for (std::string name; std::getline(list, name, ',');) passNames.push_back(name);
         } else if (a == "--dma-timing" && hasValue) ctx.robustDma = std::string(argv[++i]) != "model";
         else if (a == "--scheduler" && hasValue) ctx.scheduler = argv[++i];
+        else if (a == "--rename" && hasValue) ctx.renameClasses = argv[++i];
+        else if (a == "--critical-waits") ctx.criticalWaits = true;
+        else if (a == "--no-critical-waits") ctx.criticalWaits = false;
+        else if (a == "--dma-queue-heights") ctx.dmaQueueHeights = true;
+        else if (a == "--no-dma-queue-heights") ctx.dmaQueueHeights = false;
         else if (a == "--list-passes") {
             for (const Pass& p : allPasses()) std::cout << p.name << "\t" << p.description << "\n";
             return 0;
@@ -101,6 +111,9 @@ int main(int argc, char** argv) {
                           input.c_str(), before.cycles, after.cycles, (double)before.cycles / std::max(1LL, after.cycles),
                           before.issued, after.issued);
             std::cerr << buf;
+            if (std::getenv("ATLAS_SCHED_DEBUG"))
+                std::cerr << "  DMA busy " << after.dmaBusy << " of " << after.cycles << " cycles; exposed (non-DMA) "
+                          << before.cycles - before.dmaBusy << " -> " << after.cycles - after.dmaBusy << "\n";
         }
         printProblems("output", after);
         if (ctx.robustDma) printProblems("output with slower DMA", afterSlow);
