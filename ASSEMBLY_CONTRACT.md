@@ -29,7 +29,7 @@ extensions are a naming convention; atlas-opt takes any path
 
 **Equivalence:** the executable program leaves the same DRAM contents at exit as the
 functional one. Only DRAM is live at exit; registers, VMEM, weight slots and
-accumulators may differ. (The tests are stricter today; see §4, item 4.)
+accumulators may differ. (The tests are stricter today; see §4, item 3.)
 
 ## 2. Rules for functional assembly
 
@@ -61,7 +61,7 @@ accumulators may differ. (The tests are stricter today; see §4, item 4.)
    Before the marked CSR executes, all earlier work has finished, DMA included. A
    completion gives no host acknowledgment, buffer ownership, or proof that the kernel
    has left its IMEM slot. What state is observable at a completion is open (§4,
-   item 4).
+   item 3).
 
 atlas-opt rejects address-dependent instructions and ISA violations with the line
 number. It cannot detect a program that is wrong when run one instruction at a time;
@@ -108,15 +108,13 @@ loads whose data is provably still in VMEM. None of these is implemented yet.
 2. **Functional model.** Who owns the model that runs `.fs.S` one instruction at a
    time, with a DMA complete when it issues (rule 6)? Until it exists, FS is only
    checked by running atlas-opt's output on npu_model.
-3. May atlas-opt move VMEM buffers between banks so loads and stores overlap? Declaring
-   scratch DRAM would also let it drop stores to regions dead at exit.
-4. **What is live at exit and at a completion?** This contract says only DRAM, but
+3. **What is live at exit and at a completion?** This contract says only DRAM, but
    the equivalence harness also compares VMEM, a regression test compares scalar
    registers, and the publication tests read MREGs at the completion. Pick one
    definition (DRAM only, or DRAM plus declared output regions) and make the tests
    follow it. It decides which registers atlas-opt may rename and which loads and
    stores it may drop.
-5. A version header (`# atlas-fs 0`) so tools can reject files for another contract
+4. A version header (`# atlas-fs 0`) so tools can reject files for another contract
    version. Not implemented.
-6. Where shared pieces live (parser, ISA table, both models); several near-copies
+5. Where shared pieces live (parser, ISA table, both models); several near-copies
    exist today.
