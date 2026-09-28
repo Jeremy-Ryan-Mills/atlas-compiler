@@ -1,139 +1,119 @@
 # Functional / Executable Assembly Contract
 
-**Status:** draft v0 for the team meeting. It builds on the PI's proposal to split
-functional assembly from executable assembly.
+**Status:** draft v0, building on the PI's proposal to split functional from
+executable assembly.
 
 ```
-model (PyTorch / MLIR) ──model mapping──▶  kernel.fs.S  ──atlas-opt──▶  kernel.es.S  ──perf model──▶ numbers
-                         (high level)      functional      (low level)   executable
+model ──model mapping──▶ kernel.fs.S ──atlas-opt──▶ kernel.es.S ──▶ perf model / RTL
+                          functional                 executable
 ```
 
-- **Model mapping** decides *what* the NPU computes and *where the data lives*:
-  fusion, tiling, loop structure, data layout, buffer allocation.
-- **atlas-opt** decides *when* each instruction issues, so the hardware runs the
-  functional program correctly and as fast as possible.
-- The functional assembly (FS) is the only thing the two sides exchange. It must be
-  correct when run one instruction at a time, and it knows nothing about timing.
+- **Model mapping** decides *what* the NPU computes and *where data lives*: fusion,
+  tiling, loops, layout, buffer allocation.
+- **atlas-opt** decides *when* each instruction issues, so the program runs correctly
+  and as fast as possible.
+- The functional assembly (FS) is the only interface. It is correct when run one
+  instruction at a time and contains no timing.
 
-## 1. File extensions
+## 1. Formats
 
-| Format | Extension | Example |
+| | Functional (`.fs.S`) | Executable (`.es.S`) |
 |---|---|---|
-| Functional assembly (model mapping → atlas-opt) | `.fs.S` | `gemma_mlp.fs.S` |
-| Executable assembly (atlas-opt → perf model / RTL) | `.es.S` | `gemma_mlp.es.S` |
+| Written by | model mapping | atlas-opt |
+| Semantics | sequential: each instruction finishes before the next starts | npu_model `rtl-match` timing |
+| `delay` | not allowed | holds the next instruction N cycles |
+| Branches | take effect immediately; no delay slot | one delay slot after a taken branch or jump |
+| `dma.wait` | see §2, rule 5 | holds the frontend until the channel is idle |
+| Hardware rules | none | every RTL assertion holds (MREG reservations and ports, VPU slots, MXU ports, LSU paths, VMEM banks) |
 
-Why a double extension ending in `.S`:
-- **Tooling keeps working.** npu_model's editor extension and language server
-  already recognize `.S`, and npu_model's `load_asm` takes any path. A bare `.fs` would
-  need tooling changes, and it collides with F# and GLSL fragment shaders (`.es` with
-  ECMAScript).
-- **The two versions of a kernel sort next to each other**, and a build rule is one
-  line: `%.es.S: %.fs.S ; atlas-opt $< -o $@`.
-- **It uses the PI's FS / ES names.**
+Both use today's instruction set and syntax (`li`, `nop` and labels allowed). The
+double extension keeps existing `.S` tooling working and sorts the two versions of a
+kernel together; the build rule is `%.es.S: %.fs.S ; atlas-opt $< -o $@`. Each file
+starts with a version comment: `# atlas-fs 0` or `# atlas-es 0`.
 
-Existing hand-scheduled kernels (today's `*.S` in npu_model) are executable
-assembly. `scripts/strip_delays.py kernel.S -o kernel.fs.S` turns one into
-functional assembly, for testing.
+Today's hand-scheduled kernels are executable assembly;
+`scripts/strip_delays.py kernel.S -o kernel.fs.S` converts one for testing.
 
-Each file should start with a one-line version comment so tools can reject a file
-written for a different version of this contract: `# atlas-fs 0` or `# atlas-es 0`.
+**Equivalence:** the `.es.S` leaves the same DRAM contents at exit as the `.fs.S` run
+sequentially. Only DRAM is live at exit; registers, VMEM, weight slots and
+accumulators may differ. (The tests are stricter today; see §4, item 7.)
 
-## 2. The two formats
+## 2. Rules for functional assembly
 
-**Functional assembly (`.fs.S`)** has *sequential semantics*. Every instruction
-finishes before the next one starts, so a later instruction always sees the effect
-of an earlier one.
-- Same instruction set and syntax as today's assembly. `li`, `nop` and labels are
-  allowed.
-- **No `delay`.**
-- **No branch delay slot.** A branch or jump takes effect immediately. The
-  instruction after a branch runs only if the branch is not taken.
-- **DMA:** see §4 (v0 keeps `dma.wait`; v1 removes it).
+1. Runs correctly one instruction at a time and `dma.store`s every output to DRAM.
+2. No `delay`, and no reliance on a branch delay slot.
+3. No dependence on instruction addresses: no `auipc`, and cycle-counter CSRs only for
+   diagnostics.
+4. Obeys the ISA legality rules: even BF16 register pairs, no pair at m63, `vload` /
+   `vstore` 1 KiB aligned within one 256 KiB VMEM bank, and no instruction that
+   conflicts with itself (e.g. `vadd.bf16 m4, m0, m32`: m0 and m32 share a physical
+   MREG bank).
+5. **DMA, v0 (today):** a `dma.wait.chN` follows each `dma.load` / `dma.store` /
+   `dma.config` on channel N before anything uses that data, touches that VMEM range,
+   or reuses channel N. A DMA's registers (`rd`, `rs1`, `rs2`) stay unchanged until
+   its wait, because npu_model reads them when the transfer completes.
+   **v1 (PI's target, to be agreed):** no `dma.wait`; a DMA completes when it issues,
+   and atlas-opt inserts the waits and picks channels. The functional model must
+   define DMA the same way.
+6. **Completion:** signal that results are ready with `atlas.complete <value>, <CSR>`
+   (immediate 0–31, emitted as `csrrwi`) or `atlas.complete xN, <CSR>` (emitted as
+   `csrrw`). An ordinary CSR write is not a completion. Sequentially, all earlier work
+   has finished; in v0, every DMA channel that may be pending needs a matching
+   `dma.wait` on every path to the completion. A completion gives no host
+   acknowledgment, buffer ownership, or proof that the kernel has left its IMEM slot.
+   What state is observable at a completion is open (§4, item 7).
 
-**Executable assembly (`.es.S`)** has the timing semantics of the hardware
-(npu_model `rtl-match`):
-- `delay N` holds the next instruction for N cycles.
-- A taken branch or jump runs exactly one delay-slot instruction first.
-- `dma.wait` holds the frontend until its channel is idle.
-- Every rule the RTL asserts on holds: MREG reservations and ports, VPU slots, MXU
-  ports, LSU paths, VMEM banks.
+atlas-opt rejects `delay`, `auipc`, ISA violations, and a completion that may run with
+DMA pending, with the line number. It cannot detect reliance on a delay slot or
+violations of rules 1 and 5; the equivalence harness catches those.
 
-**Equivalence.** Running the `.es.S` leaves the same DRAM contents at program exit as
-running the `.fs.S` one instruction at a time. Only DRAM is live at exit.
-Registers, VMEM, MXU weight slots and accumulators may end up different. (The
-equivalence harness is stricter today and also compares VMEM.)
+## 3. Responsibilities
 
-## 3. Who handles what
+"May" marks what the contract allows atlas-opt to do; several of these are roadmap
+items, not built yet.
 
-"May" in the atlas-opt column means the contract allows it. Several of those
-(dropping loads, reassigning channels, renaming registers, switching MXUs, folding
-address conversions) are on atlas-opt's roadmap rather than built today.
-
-| Concern | Model mapping (writes `.fs.S`) | atlas-opt (writes `.es.S`) |
+| Concern | Model mapping | atlas-opt |
 |---|---|---|
-| Operator fusion, tiling, tile sizes | ✅ owns | — |
-| Loop structure: order, unrolling, trip counts | ✅ owns | keeps loops as written (no unrolling, no new loops) |
-| Overlapping loop iterations (double buffering) | allocates the ping-pong buffers and unrolls by 2 | overlaps the unrolled iterations |
-| DRAM layout and addresses | ✅ owns | never changes them |
-| VMEM buffer allocation and addresses | ✅ owns | never changes them (moving buffers between banks is open, §5) |
-| Which data to move (`dma.load/store`, sizes) | ✅ owns | may drop a load whose data is provably still in VMEM |
-| `dma.config` / `dma.base` | ✅ owns | keeps them, in order |
-| DMA channel numbers | picks any channels | may reassign channels |
-| `dma.wait` placement | v0: places a wait before data is used (§4) | v0: keeps each wait and reorders independent work around it; v1: inserts all waits |
-| Register allocation (x, m, e) | assigns registers | may rename any register |
-| MXU choice (`.mxu0` / `.mxu1`), weight slots, accumulators | picks any | may move a matmul group to the other MXU. MXU0 and MXU1 are treated as equivalent, but their rounding differs slightly, so goldens need a tolerance |
-| ISA legality of each instruction (even BF16 register pairs, no pair at m63, `vload`/`vstore` 1 KiB aligned within one 256 KiB VMEM bank) | ✅ owns; atlas-opt rejects violations | — |
-| An instruction that conflicts with itself (e.g. `vadd.bf16 m4, m0, m32`: m0 and m32 share a physical MREG bank) | avoids it for now | rejects it today; could fix it by renaming later |
-| Word vs. byte addresses (`vload`/`vstore` take word addresses, e.g. `srli x31, x4, 2`) | writes correct addresses | may fold the conversion into the offset |
-| Instruction order within the dependencies | writes any correct sequential order | reorders freely |
-| `delay`s | never writes them | ✅ inserts all of them |
-| Branch delay slots | never relies on them | ✅ adds and fills them |
-| Letting in-flight work finish before `ecall` / `ebreak` | — | ✅ |
-| No-op instructions | may leave them | removes them |
-| Numerics | ✅ owns (goldens, tolerances) | never changes them, except the MXU choice above |
-| Correctness of the functional program | ✅ checked against the golden reference (with a functional model once one exists; owner TBD) | — |
-| ES equivalent to FS | — | ✅ checked by the equivalence harness on npu_model |
+| Fusion, tiling, tile sizes | owns | no change |
+| Loop order, unrolling, trip counts | owns | keeps loops as written |
+| Overlapping iterations (double buffering) | allocates ping-pong buffers, unrolls by 2 | overlaps the unrolled iterations |
+| DRAM and VMEM addresses | owns | no change (moving buffers between VMEM banks is open, §4) |
+| Which data moves (`dma.load/store`, sizes) | owns | may drop a load whose data is provably still in VMEM |
+| `dma.config` / `dma.base` | owns | keeps them, in order |
+| DMA channels | any | may reassign |
+| `dma.wait` placement | v0: places them (rule 5) | v0: keeps each wait, reorders independent work around it; v1: inserts all |
+| Registers (x, m, e) | assigns | may rename any |
+| MXU, weight slots, accumulators | any | may move a matmul group to the other MXU; MXU0 and MXU1 round slightly differently, so goldens need a tolerance |
+| ISA legality (rule 4) | owns | rejects violations; may later fix self-conflicts by renaming |
+| VLS word addresses (`srli x31, x4, 2`) | writes them correctly | may fold the conversion into the offset |
+| Instruction order | any correct sequential order | reorders freely within dependences |
+| `delay`s and branch delay slots | never writes or relies on them | inserts and fills all of them |
+| Finishing in-flight work before `ecall` / `ebreak` | nothing | handles it |
+| Completion (`atlas.complete`) | places it after the work it publishes (rule 6) | makes all earlier work, DMA included, finish before the CSR executes; never puts it in a delay slot |
+| No-ops | may leave them | removes them |
+| Numerics (goldens, tolerances) | owns | no change, except the MXU choice above |
+| FS correctness | checked against the golden reference (functional model owner TBD) | nothing |
+| ES equivalent to FS | nothing | checked by the equivalence harness on npu_model |
 
-Rule of thumb: if a change alters *which* operations run on *which* data, it
-belongs to model mapping. If it only alters *when* they run, or *which* physically
-interchangeable resource (a register, channel, MXU or delay slot) they use, it
-belongs to atlas-opt.
+**Rule of thumb:** changing *which* operations run on *which* data belongs to model
+mapping. Changing only *when* they run, or which interchangeable resource (register,
+channel, MXU, delay slot) they use, belongs to atlas-opt.
 
-## 4. Rules for functional assembly
+## 4. Open items
 
-A `.fs.S` file must:
-1. Run correctly one instruction at a time, and leave its results in DRAM (a
-   `dma.store` of every output).
-2. Contain no `delay`, and never rely on a branch delay slot.
-3. Not depend on instruction addresses: no `auipc`, and no reading the cycle-counter
-   CSRs for anything but diagnostics. atlas-opt changes both.
-4. Satisfy the ISA legality rules in §3.
-5. **DMA, v0 (today):**
-   - put a `dma.wait.chN` after each `dma.load` / `dma.store` / `dma.config` on
-     channel N before anything uses that data, touches that VMEM range, or reuses
-     channel N;
-   - not change a DMA's source registers (`rd`, `rs1`, `rs2`) before its wait. npu_model
-     reads them when the transfer completes.
-
-   **DMA, v1 (the PI's target, to be agreed):** no `dma.wait` at all. A DMA
-   completes the moment it issues, and atlas-opt inserts the waits (and picks the
-   channels). This needs the functional model to define DMA the same way.
-
-atlas-opt rejects `delay`, `auipc`, and instructions that break the ISA rules,
-with the line number. It cannot tell whether a program relies on a delay slot or
-breaks rule 1 or 5; the equivalence harness catches those.
-
-## 5. Open items for the meeting
-
-1. **Extensions and the version header**: adopt `.fs.S` / `.es.S` and `# atlas-fs 0`?
-2. **`dma.wait` in functional assembly** (v0 → v1 above): when, and who changes the
-   functional model.
-3. **Who owns the functional model** that runs `.fs.S` one instruction at a time
-   (PI's point 2). Until it exists, FS can only be checked by running atlas-opt's
-   output on npu_model.
-4. **May atlas-opt move VMEM buffers between banks**, so loads and stores in
-   different banks overlap? Today it may not.
-5. **Declaring scratch DRAM.** If model mapping marks DRAM regions that are dead at
-   exit, atlas-opt could drop stores to them and loads of data it just stored.
-6. **Where the shared pieces live** (parser, ISA table, both models). That's the PI's
-   point 3: several copies of very similar code today.
+1. Adopt the `.fs.S` / `.es.S` extensions and the `# atlas-fs 0` header?
+2. DMA v0 to v1: when, and who updates the functional model?
+3. Who owns the functional model that runs `.fs.S` sequentially? Until it exists, FS
+   is only checked by running atlas-opt's output on npu_model.
+4. May atlas-opt move VMEM buffers between banks so loads and stores overlap? (Not
+   today.)
+5. Declaring scratch DRAM: if model mapping marks regions dead at exit, atlas-opt can
+   drop stores to them and loads of data it just stored.
+6. Where shared pieces live (parser, ISA table, both models); several near-copies
+   exist today.
+7. **What is live at exit and at a completion?** This contract says only DRAM, but
+   the equivalence harness also compares VMEM, a regression test compares scalar
+   registers, and the publication tests read MREGs at the completion. Pick one
+   definition (DRAM only, or DRAM plus declared output regions) and make the tests
+   follow it. It decides which registers atlas-opt may rename and which loads and
+   stores it may drop.
