@@ -56,12 +56,13 @@ accumulators may differ. (The tests are stricter today; see §4, item 3.)
    Channels are kept as written for now, and commands on different channels keep
    their queue order (including `dma.config`). The DMA queue is assumed idle at
    program entry.
-7. **Completion:** mark the CSR write that signals completion with `# atlas.release`,
-   e.g. `csrrwi x0, x1, 0xC10 # atlas.release`. Unmarked CSR writes are ordinary.
-   Before the marked CSR executes, all earlier work has finished, DMA included. A
-   completion gives no host acknowledgment, buffer ownership, or proof that the kernel
-   has left its IMEM slot. What state is observable at a completion is open (§4,
-   item 3).
+7. **Completion:** signal that results are ready with `atlas.complete <value>, <CSR>`
+   (an immediate 0–31) or `atlas.complete xN, <CSR>`, e.g. `atlas.complete 1, 0xC10`.
+   atlas-opt emits it as `csrrwi` / `csrrw` tagged `# atlas.complete`. A plain CSR
+   write is not a completion. Before the completion executes, all earlier work has
+   finished, DMA included. A completion gives no host acknowledgment, buffer
+   ownership, or proof that the kernel has left its IMEM slot. What state is
+   observable at a completion is open (§4, item 3).
 
 atlas-opt rejects address-dependent instructions and ISA violations with the line
 number. It cannot detect a program that is wrong when run one instruction at a time;
@@ -86,7 +87,7 @@ the equivalence harness catches that.
 | `delay`s | never writes them | inserts the minimum |
 | Branch delay slots | writes a `nop` after each branch or jump | fills each slot with independent scalar work |
 | Finishing in-flight work before `ecall` / `ebreak` | nothing | drains fixed-latency work and waits for DMA |
-| Completion (`# atlas.release`) | marks the CSR (rule 7) | finishes all earlier work, DMA included, before it |
+| Completion (`atlas.complete`) | writes it after the work it publishes (rule 7) | finishes all earlier work, DMA included, before it |
 | No-ops | may leave them | removes filler no-ops |
 | Numerics (goldens, tolerances) | owns | no change |
 | FS correctness | checked against the golden reference (functional model owner TBD) | nothing |
