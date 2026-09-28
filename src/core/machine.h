@@ -22,6 +22,7 @@ struct MachineModel {
     bool mxu1OverwriteAccReadHold = true;
     bool mxu0OverwriteAccReadHold = true;
     bool rtlDma = false;  // issue-captured commands and explicit completion lifetimes
+    bool rtlDmaRanges = false;  // v2 profile: configured, projected DRAM byte ranges
     std::string sourceIrSha256;
     std::string name = "npu_model/rtl-match";
 };
@@ -36,7 +37,7 @@ enum class Res { XReg, EReg, MReg, Acc, Weight, Vmem, DmaBase, Dram };
 // Elements [first, first + count) of one kind of storage. Element i is touched at
 // age + i * step. Elements are: register numbers for XReg/EReg, reg*32+row for MReg,
 // (mxu*2+index)*32+row for Acc/Weight, and 32-byte line numbers for Vmem.
-// Dram accesses currently use anywhere=true because DRAM base state is not tracked.
+// Dram uses the dedicated 64-bit byte range below; first/count remain row/line indices.
 struct Access {
     Res res;
     bool write;
@@ -46,8 +47,12 @@ struct Access {
     // Default DMA model: access happens at completion. RTL DMA: memory is live
     // from launch until an explicit wait establishes completion; age is not a bound.
     bool atCompletion = false;
+    uint64_t dramFirstByte = 0, dramBytes = 0;  // known non-wrapping physical bus interval
     int lastAge() const { return age + (count - 1) * step; }
 };
+
+// Shared memory overlap rule, including unknown and wide DRAM addresses.
+bool accessesOverlap(const Access& a, const Access& b);
 
 // Hardware structures that only one (or a few) instructions may use per cycle.
 enum class Unit {

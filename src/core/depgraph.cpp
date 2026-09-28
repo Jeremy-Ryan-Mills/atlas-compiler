@@ -23,18 +23,12 @@ struct EdgeSet {
     }
 };
 
-bool overlaps(const Access& x, const Access& y) {
-    if (x.res != y.res) return false;
-    if (x.anywhere || y.anywhere) return true;
-    return x.first < y.first + y.count && y.first < x.first + x.count;
-}
-
 // Does instruction `f` conflict with what DMA instruction `dma` does at completion?
 bool conflictsAtCompletion(const Footprint& dma, const Footprint& f, EdgeKind& kind) {
     for (const Access& x : dma.accesses) {
         if (!x.atCompletion) continue;
         for (const Access& y : f.accesses) {
-            if (!overlaps(x, y) || (!x.write && !y.write)) continue;
+            if (!accessesOverlap(x, y) || (!x.write && !y.write)) continue;
             if (x.res == Res::DmaBase && y.atCompletion) continue;  // the DMA queue keeps these in order
             kind = x.write && y.write ? EdgeKind::WAW : x.write ? EdgeKind::RAW : EdgeKind::WAR;
             return true;

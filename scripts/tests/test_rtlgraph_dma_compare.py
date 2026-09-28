@@ -148,16 +148,16 @@ class DmaCompareTests(unittest.TestCase):
             finally:
                 path.write_bytes(original)
 
-    def native_fixture(self):
+    def native_fixture(self, version=1):
         compiler, driver, hardware = [self.root / name for name in ('atlas-opt', 'adapter.py', 'hardware.mlir')]
         for path in (compiler, driver, hardware):
             path.write_text(path.name + '\n')
         canonical = self.root / 'profile.json'
         overrides = dict(completion='explicit-wait', operand_capture='issue')
-        canonical.write_text(json.dumps(dict(config='EE290SimConfig', compiler_overrides=overrides,
+        canonical.write_text(json.dumps(dict(schema=f'atlas.rtlgraph.dma-profile.v{version}', config='EE290SimConfig', compiler_overrides=overrides,
                                              inputs=dict(hardware_ir=artifact(hardware)))))
         profile = self.root / 'atlas-dma.profile'
-        profile.write_text('schema=atlas-dma-profile-v1\nconfig=EE290SimConfig\n'
+        profile.write_text(f'schema=atlas-dma-profile-v{version}\nconfig=EE290SimConfig\n'
                            f'source_ir_sha256={artifact(hardware)["sha256"]}\n'
                            f'evidence_sha256={artifact(canonical)["sha256"]}\n'
                            + ''.join(f'{key}={value}\n' for key, value in overrides.items()))
@@ -194,6 +194,35 @@ class DmaCompareTests(unittest.TestCase):
         check.assert_called_once()
         self.assertTrue(result['native_compiler_audit']['exact_final_native_checks_repeated'])
         self.assertEqual(result['comparisons']['native_critical']['memory_baseline']['first_issue_to_dbg0_edges']['edges_saved'], 50)
+
+    def test_native_v2_can_compare_directly_with_original(self):
+        self.native_fixture(version=2)
+        with patch('rtlgraph_dma_compare.subprocess.run') as check:
+            check.return_value.returncode = 0
+            result = compare(self.runs['original'], None,
+                             {'native_critical': self.runs['output_overlap']}, self.static)
+        self.assertEqual(set(result['cases']), {'original', 'native_critical'})
+        self.assertEqual(set(result['comparisons']['native_critical']), {'original'})
+        self.assertEqual(result['comparisons']['native_critical']['original']['first_issue_to_dbg0_edges']['edges_saved'], 150)
+
+    def test_native_profile_and_canonical_versions_must_match(self):
+        self.native_fixture(version=2)
+        canonical = self.root / 'profile.json'
+        record = json.loads(canonical.read_text())
+        record['schema'] = 'atlas.rtlgraph.dma-profile.v1'
+        old_hash = artifact(canonical)['sha256']
+        canonical.write_text(json.dumps(record))
+        profile = self.root / 'atlas-dma.profile'
+        profile.write_text(profile.read_text().replace(old_hash, artifact(canonical)['sha256']))
+        self.record['inputs']['profile'] = artifact(profile)
+        self.save_static()
+        with self.assertRaisesRegex(ValueError, 'profile evidence differs'):
+            self.compare_native()
+
+    def test_legacy_experiment_still_requires_its_memory_baseline(self):
+        with self.assertRaisesRegex(ValueError, 'require a memory baseline'):
+            compare(self.runs['original'], None,
+                    {'output_overlap': self.runs['output_overlap']}, self.static)
 
     def test_native_final_check_must_bind_replayed_stream_and_selected_model(self):
         case = self.native_fixture()

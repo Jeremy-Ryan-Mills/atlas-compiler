@@ -8,9 +8,10 @@ RegValues unknownRegs() {
     return r;
 }
 
-RegValues zeroRegs() {
+RegValues zeroRegs(bool resetDmaBase) {
     RegValues r;
     for (auto& v : r) v = 0;
+    if (resetDmaBase) r.dmaBase = 0;
     return r;
 }
 
@@ -53,6 +54,7 @@ std::optional<uint32_t> aluResult(const Instr& in, const RegValues& regs) {
 
 void applyScalar(const Instr& in, RegValues& regs) {
     OpClass c = in.op->opClass;
+    if (c == OpClass::DmaConfig) regs.dmaBase = regs[in.rs1];
     bool writesX = c == OpClass::Alu || c == OpClass::Csr || c == OpClass::Jump || c == OpClass::ScalarLoad;
     if (!writesX || in.rd == 0) return;
     regs[in.rd] = c == OpClass::Alu ? aluResult(in, regs) : std::nullopt;
@@ -62,15 +64,16 @@ static bool mergeInto(RegValues& into, const RegValues& from) {
     bool changed = false;
     for (int r = 1; r < 32; r++)
         if (into[r] && (!from[r] || *from[r] != *into[r])) into[r].reset(), changed = true;
+    if (into.dmaBase && into.dmaBase != from.dmaBase) into.dmaBase.reset(), changed = true;
     return changed;
 }
 
-std::vector<RegValues> blockEntryValues(const Code& code) {
+std::vector<RegValues> blockEntryValues(const Code& code, bool preciseDma) {
     size_t n = code.blocks.size();
     std::vector<RegValues> entry(n);
     std::vector<bool> reached(n, false);
     if (n == 0) return entry;
-    entry[0] = zeroRegs();
+    entry[0] = zeroRegs(preciseDma);
     reached[0] = true;
     bool anyUnknownJump = false;
 
@@ -94,6 +97,6 @@ std::vector<RegValues> blockEntryValues(const Code& code) {
     }
     // Blocks that are unreachable or reached through jalr get no assumptions.
     for (size_t i = 0; i < n; i++)
-        if (!reached[i] || (anyUnknownJump && i > 0)) entry[i] = unknownRegs();
+        if (!reached[i] || (anyUnknownJump && (i > 0 || preciseDma))) entry[i] = unknownRegs();
     return entry;
 }

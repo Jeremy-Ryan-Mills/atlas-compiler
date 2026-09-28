@@ -136,7 +136,7 @@ static void scheduleBlock(Block& block, const RegValues& entry, bool robustDma, 
 }
 
 void schedule(Code& code, PassContext& ctx) {
-    std::vector<RegValues> entry = blockEntryValues(code);
+    std::vector<RegValues> entry = blockEntryValues(code, ctx.model.rtlDmaRanges);
     uint32_t dmaRegs = dmaOperandRegisters(flatten(code).instrs);
     for (size_t bi = 0; bi < code.blocks.size(); bi++) {
         try {

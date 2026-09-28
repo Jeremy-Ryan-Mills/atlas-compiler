@@ -78,7 +78,7 @@ and explicit completion lifetimes. The selected profile requires matching waits
 within each basic block and rejects pending DMA across block boundaries. It uses
 minimum issue spacing and reservations widened over waits for checking; compiler
 cycle counts remain estimates. The default model and existing MXU profiles remain
-available. No automatic wait-insertion pass is added.
+available. No automatic wait-insertion pass is added. The [version-2 DRAM range projection](docs/rtlgraph-dram-ranges.md) additionally tracks captured configuration and 37-bit bus addresses, allowing provably disjoint transfers to overlap.
 
 ## Layout
 

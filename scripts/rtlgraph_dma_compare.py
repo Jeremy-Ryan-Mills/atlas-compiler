@@ -41,10 +41,13 @@ def audit_native(static, selected):
     settings = dict(pairs)
     canonical_path = profile.parent / 'profile.json'
     canonical = json.loads(canonical_path.read_text())
-    require(settings.get('schema') == 'atlas-dma-profile-v1' and
+    schemas = {'atlas-dma-profile-v1': 'atlas.rtlgraph.dma-profile.v1',
+               'atlas-dma-profile-v2': 'atlas.rtlgraph.dma-profile.v2'}
+    require(settings.get('schema') in schemas and
+            canonical.get('schema') == schemas[settings['schema']] and
             settings.get('config') == canonical.get('config') == 'EE290SimConfig' and
             settings.get('evidence_sha256') == artifact(canonical_path)['sha256'], 'Native DMA profile evidence differs')
-    require(settings == dict(schema='atlas-dma-profile-v1', config='EE290SimConfig',
+    require(settings == dict(schema=settings['schema'], config='EE290SimConfig',
                              source_ir_sha256=canonical['inputs']['hardware_ir']['sha256'],
                              evidence_sha256=artifact(canonical_path)['sha256'],
                              **{key: str(value) for key, value in canonical['compiler_overrides'].items()}),
@@ -96,9 +99,13 @@ def compare(original, memory_baseline, candidates, candidate_manifest):
              and static.get('status') == 'candidates_ready'), 'Invalid DMA candidate manifest')
     require(candidates and set(candidates) <= set(static['cases']), 'Unknown or missing DMA candidate')
     require(not set(candidates) & {'original', 'memory_baseline'}, 'Reserved candidate name')
+    require(native or memory_baseline is not None, 'Legacy DMA experiments require a memory baseline')
     native_audit = audit_native(static, candidates) if native else None
     results, baseline = {}, None
-    for name, path in [('original', original), ('memory_baseline', memory_baseline), *candidates.items()]:
+    references = [('original', original)]
+    if memory_baseline is not None:
+        references.append(('memory_baseline', memory_baseline))
+    for name, path in [*references, *candidates.items()]:
         run = json.loads(path.read_text())
         report = observation(path)  # Recheck command ownership, waits, row accesses, and goldens.
         completion = report['completion']
@@ -144,8 +151,8 @@ def compare(original, memory_baseline, candidates, candidate_manifest):
                          'checked_words': completion['functional_result']['checked_words'],
                          'dma_commands': len(report['commands'])}
     comparisons = {}
-    for name in ['memory_baseline', *candidates]:
-        refs = ['original'] if name == 'memory_baseline' else ['original', 'memory_baseline']
+    for name in [*(name for name, _ in references if name != 'original'), *candidates]:
+        refs = ['original'] if name == 'memory_baseline' else [key for key, _ in references]
         comparisons[name] = {}
         for reference in refs:
             before = results[reference]['metrics']['first_issue_to_dbg0_edges']
@@ -172,8 +179,10 @@ def compare(original, memory_baseline, candidates, candidate_manifest):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('original', 'memory-baseline', 'candidate-manifest', 'output'):
+    for name in ('original', 'candidate-manifest', 'output'):
         parser.add_argument('--' + name, required=True, type=Path)
+    parser.add_argument('--memory-baseline', type=Path,
+                        help='Optional additional baseline for native schedules; required for the legacy experiment')
     parser.add_argument('--candidate', action='append', default=[], metavar='NAME=MANIFEST')
     args = parser.parse_args()
     require(not args.output.exists(), 'Output must be new')
@@ -182,7 +191,7 @@ def main():
         name, sep, path = value.partition('=')
         require(sep and name not in candidates, 'Invalid or duplicate candidate')
         candidates[name] = Path(path).resolve()
-    report = compare(args.original.resolve(), args.memory_baseline.resolve(), candidates,
+    report = compare(args.original.resolve(), args.memory_baseline.resolve() if args.memory_baseline else None, candidates,
                      args.candidate_manifest.resolve())
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + '\n')

@@ -68,8 +68,8 @@ ProgramView buildProgramView(const std::string& source, const AsmProgram& origin
     view.before = before;
     view.after = after;
     Code orig = buildBlocks(original);
-    std::vector<RegValues> entryOrig = blockEntryValues(orig);
-    std::vector<RegValues> entryOpt = blockEntryValues(optimized);
+    std::vector<RegValues> entryOrig = blockEntryValues(orig, model.rtlDmaRanges);
+    std::vector<RegValues> entryOpt = blockEntryValues(optimized, model.rtlDmaRanges);
     uint32_t dmaRegs = dmaOperandRegisters(original.instrs);
 
     for (size_t bi = 0; bi < orig.blocks.size() && bi < optimized.blocks.size(); bi++) {

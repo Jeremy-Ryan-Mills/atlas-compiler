@@ -3,6 +3,19 @@
 #include <algorithm>
 #include <climits>
 
+bool accessesOverlap(const Access& a, const Access& b) {
+    if (a.res != b.res) return false;
+    if (a.anywhere || b.anywhere) return true;
+    if (a.res == Res::Dram) {
+        if (!a.dramBytes || !b.dramBytes) return false;
+        // Subtraction avoids overflowing either interval's exclusive endpoint.
+        return a.dramFirstByte <= b.dramFirstByte ? b.dramFirstByte - a.dramFirstByte < a.dramBytes :
+                                                   a.dramFirstByte - b.dramFirstByte < b.dramBytes;
+    }
+    return (int64_t)a.first < (int64_t)b.first + b.count &&
+           (int64_t)b.first < (int64_t)a.first + a.count;
+}
+
 int dmaTransferCycles(long long bytes) {
     long long offchip = (bytes + 8 + 3) / 4 * 2;  // 32-bit link, 2 cycles per beat, 2 command words
     long long vmem = (bytes + 63) / 64;
@@ -384,11 +397,25 @@ Footprint footprintOf(const Instr& in, const RegValues& regs, const MachineModel
                 if (bytes && (*bytes < kLineBytes || *bytes > 4096 || *bytes % kLineBytes))
                     b.f.error = "RTL DMA size must be a multiple of 32 bytes in 32..4096";
                 if (addr) addr = ((*addr >> 3) & 0xFFFF) * kLineBytes;
-                // DRAM base values are not represented in RegValues. Treat all
-                // DRAM transfers as possible aliases: load/load can overlap,
-                // while a store requires the other transfer's explicit wait.
+                // v1 has no address evidence and retains the all-alias fallback.
+                // v2 captures Cat(base32, low32), adds beat offsets at width 64,
+                // then projects to the configured 37-bit TileLink address bus.
                 Access memory{Res::Dram, !load, 0, 1, 0, 0};
                 memory.anywhere = memory.atCompletion = true;
+                if (model.rtlDmaRanges && regs.dmaBase && dram && bytes &&
+                    *bytes >= kLineBytes && *bytes <= 4096 && *bytes % kLineBytes == 0 &&
+                    *dram % kLineBytes == 0) {
+                    constexpr uint64_t addressMask = (uint64_t{1} << 37) - 1;
+                    const uint64_t captured = (uint64_t{*regs.dmaBase} << 32) | static_cast<uint64_t>(*dram);
+                    const uint64_t first = captured & addressMask;
+                    // A bus-wrap transfer is conservatively all-alias instead of
+                    // representing a misleading single interval across address zero.
+                    if (static_cast<uint64_t>(*bytes - 1) <= addressMask - first) {
+                        memory.anywhere = false;
+                        memory.dramFirstByte = first;
+                        memory.dramBytes = static_cast<uint64_t>(*bytes);
+                    }
+                }
                 b.f.accesses.push_back(memory);
             }
             b.vmem(addr, bytes, load, 0, 0, true);

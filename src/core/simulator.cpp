@@ -36,8 +36,8 @@ const Access* dmaVmem(const Footprint& f) {
 // First and last cycle at which access `a` (of an instruction issued at `issue`)
 // touches an element that `range` also covers. Returns false if they don't overlap.
 bool overlapCycles(const Access& a, long long issue, const Access& range, long long& first, long long& last) {
-    if (a.res != range.res) return false;
-    if (a.anywhere || range.anywhere) {
+    if (!accessesOverlap(a, range)) return false;
+    if (a.anywhere || range.anywhere || a.res == Res::Dram) {
         first = issue + a.age, last = issue + a.lastAge();
         return true;
     }
@@ -70,7 +70,7 @@ SimResult simulate(const AsmProgram& prog, const SimOptions& opt) {
     for (int i = 0; i < (int)prog.labels.size(); i++)
         for (const std::string& l : prog.labels[i]) labelIndex[l] = i;
 
-    RegValues regs = zeroRegs();
+    RegValues regs = zeroRegs(opt.model.rtlDmaRanges);
     std::deque<InFlight> active;
     std::vector<QueuedDma> dma;
     std::array<long long, 8> channelComplete;

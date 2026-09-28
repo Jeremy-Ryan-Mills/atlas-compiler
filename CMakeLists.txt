@@ -52,3 +52,7 @@ add_test(NAME rtl-dma-tests COMMAND rtl-dma-tests)
 add_executable(rtl-dma-simulator-tests tests/rtl_dma_simulator_tests.cpp)
 target_link_libraries(rtl-dma-simulator-tests atlas)
 add_test(NAME rtl-dma-simulator-tests COMMAND rtl-dma-simulator-tests)
+
+add_executable(rtl-dma-range-tests tests/rtl_dma_range_tests.cpp)
+target_link_libraries(rtl-dma-range-tests atlas)
+add_test(NAME rtl-dma-range-tests COMMAND rtl-dma-range-tests)

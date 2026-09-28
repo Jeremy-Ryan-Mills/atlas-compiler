@@ -88,8 +88,9 @@ MachineModel readExperimentalDmaProfile(const std::string& path, const MachineMo
         if (!fields.emplace(key, value).second) throw fail("duplicate field " + key);
     }
     if (!stream.eof()) throw fail("read failed");
-    const std::map<std::string, std::string> supported = {
-        {"schema", "atlas-dma-profile-v1"}, {"config", "EE290SimConfig"},
+    const bool ranges = fields.count("schema") && fields.at("schema") == "atlas-dma-profile-v2";
+    std::map<std::string, std::string> supported = {
+        {"schema", ranges ? "atlas-dma-profile-v2" : "atlas-dma-profile-v1"}, {"config", "EE290SimConfig"},
         {"operand_capture", "issue"}, {"config_update", "issue"},
         {"vmem_word_address_low_bit", "3"}, {"vmem_line_address_bits", "16"},
         {"transfer_size_bits", "13"}, {"vmem_line_bytes", "32"},
@@ -98,6 +99,11 @@ MachineModel readExperimentalDmaProfile(const std::string& path, const MachineMo
         // A supported subset, not a consequence of the 13-bit hardware field.
         {"supported_max_transfer_bytes", "4096"},
     };
+    if (ranges) {
+        supported.insert({{"dram_address", "base32-concat-low32"}, {"dram_address_bits", "37"},
+                          {"dram_alignment_bytes", "32"}, {"dram_base_reset", "0"},
+                          {"dram_wrap", "conservative-alias"}});
+    }
     for (const auto& [key, expected] : supported) {
         auto found = fields.find(key);
         if (found == fields.end()) throw fail("missing field " + key);
@@ -116,6 +122,7 @@ MachineModel readExperimentalDmaProfile(const std::string& path, const MachineMo
         throw fail("cannot combine profiles from different hardware IR");
     MachineModel model = base;
     model.rtlDma = true;
+    model.rtlDmaRanges = ranges;  // loading v1 never inherits an unproven capability
     // Like the MXU loaders, these identities name evidence without certifying it.
     model.sourceIrSha256 = fields.at("source_ir_sha256");
     model.name = (base.sourceIrSha256.empty() ? "EE290SimConfig/" : base.name + "; ") +
