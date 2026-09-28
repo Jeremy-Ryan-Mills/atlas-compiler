@@ -7,8 +7,9 @@ model ──model mapping──▶ kernel.fs.S ──atlas-opt──▶ kernel.e
 
 - **Model mapping** decides *what* the NPU computes and *where data lives*: fusion,
   tiling, loops, layout, buffer allocation.
-- **atlas-opt** decides *when* each instruction issues: it inserts every `dma.wait`,
-  fills every branch delay slot, and adds the minimum `delay`s.
+- **atlas-opt** decides *when* each instruction issues: it reorders the program within
+  its dependences so the engines overlap, inserts every `dma.wait`, fills every branch
+  delay slot, and adds the minimum `delay`s.
 - The functional assembly (FS) is the only interface. It contains no timing.
 
 ## 1. Formats
