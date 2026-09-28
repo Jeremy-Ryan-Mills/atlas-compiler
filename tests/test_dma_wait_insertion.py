@@ -282,7 +282,7 @@ def test_wait_repairs_dma_carried_back_to_entry_release(
     publication_compiler, hardware_config_cls, publication_dir, dma_scale,
 ):
     source = (
-        'entry:\naddi x10, x10, 1\ncsrrw x0, x10, 0xC10 # atlas.release\n'
+        'entry:\naddi x10, x10, 1\ncsrrw x0, x10, 0xC10 # atlas.complete\n'
         'addi x11, x0, 3\nbge x10, x11, done\nnop\n'
         'addi x7, x0, 32\nlui x1, 1\ndma.load.ch0 x1, x0, x7\n'
         'jal x0, entry\nnop\ndone:\naddi x12, x0, 9\n'

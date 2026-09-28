@@ -57,7 +57,7 @@ def test_release_rejects_channel_reuse_hidden_by_fixed_delay(
     try:
         optimized = publication_without_dma_insertion(source, publication_dir)
     except harness.OptimizerError as error:
-        assert 'atlas.release' in str(error)
+        assert 'atlas.complete' in str(error)
         assert 'ch0' in str(error)
         assert not (publication_dir / 'after.S').exists()
         return
@@ -84,8 +84,8 @@ def test_unmarked_channel_reuse_retains_legacy_acceptance_when_insertion_is_disa
     publication_without_dma_insertion, publication_dir
 ):
     # Legacy acceptance is unchanged; this stream still fails at 100x latency.
-    source = REUSED_CHANNEL.replace('# atlas.release', '# progress only')
+    source = REUSED_CHANNEL.replace('# atlas.complete', '# progress only')
     optimized = publication_without_dma_insertion(source, publication_dir)
-    assert 'atlas.release' not in optimized
+    assert 'atlas.complete' not in optimized
     assert optimized.count('dma.config.ch0') == 2
     assert 'keep' in optimized

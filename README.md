@@ -1,4 +1,4 @@
-# atlas-compiler-experiments
+# Atlas Compiler
 
 `atlas-opt` reads Atlas NPU assembly, builds a dependency graph for every basic
 block, and reschedules the code so the engines overlap while every dependence and
@@ -40,7 +40,7 @@ Scheduled halts use a NOP guard after delays, including across labels;
 halt. Robust DMA scheduling reserves remaining port use across waits and gaps.
 
 The default `insert-dma-waits` pass inserts waits before DMA hazards, channel reuse,
-marked completion signals, and exits, accounting for branches and loops. It preserves
+completion signals, and exits, accounting for branches and loops. It preserves
 explicit waits and assumes idle DMA entry. Scheduling overlaps independent work
 with transfers and prioritizes waits that unlock useful work. Timing estimates
 guide placement; actual waits enforce completion. Placement is heuristic.
@@ -48,23 +48,28 @@ guide placement; actual waits enforce completion. Placement is heuristic.
 Custom pipelines using insertion need `schedule`, plus `strip-artifacts` for DMA
 launches in delay slots. Without `insert-dma-waits`, supply required waits manually.
 
-Mark a completion CSR with `# atlas.release`:
+Use `atlas.complete <value>, <CSR>` to signal completion (or, to write a register
+value, use `atlas.complete xN, <CSR>`):
 
 ```asm
 vstore m0, 0(x0)
-csrrwi x0, x1, 0xC10 # atlas.release
+atlas.complete 1, 0xC10
 ```
 
-Prior fixed-latency work must finish before the CSR executes. Each possibly pending
-DMA channel needs a matching wait on every path to release and before reuse.
-Releases in delay slots or pipelines without `schedule` are rejected. Preserve
-the exact, case-sensitive, whitespace-delimited token during preprocessing;
-printing and reoptimization retain it.
+Immediate values (0–31) emit `csrrwi`; register operands (`xN`) emit `csrrw`.
+Both emit `# atlas.complete` for `--check`. Input must use the `atlas.complete`
+instruction; annotated CSR writes are rejected.
 
-Releases assume idle entry; unmarked CSR behavior is unchanged. A release provides
+Prior fixed-latency work must finish before the CSR executes. Each possibly pending
+DMA channel needs a matching wait on every path to completion and before reuse.
+Completions in delay slots or pipelines without `schedule` are rejected. Preserve
+the exact, case-sensitive, whitespace-delimited token during preprocessing;
+printing retains it for checking the output.
+
+Completions assume idle entry; unmarked CSR behavior is unchanged. Completion provides
 no host acknowledgment, buffer ownership, or IMEM-slot exit proof.
 `--check` only checks modeled timing and never inserts waits; optimization requires
-matching DMA waits on every path to release.
+matching DMA waits on every path to completion.
 
 ## Layout
 

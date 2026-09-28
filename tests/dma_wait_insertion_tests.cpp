@@ -8,8 +8,11 @@
 static int failures = 0, checks = 0;
 #define CHECK(condition) do { ++checks; if (!(condition)) { ++failures; std::printf("FAIL line %d: %s\n", __LINE__, #condition); } } while (0)
 
+// Sources may be printed optimizer output, which tags completions `# atlas.complete`.
+static AsmProgram parseSource(const std::string& source) { return parseAsm(source, "<input>", true); }
+
 static AsmProgram insert(const std::string& source) {
-    Code code = buildBlocks(parseAsm(source));
+    Code code = buildBlocks(parseSource(source));
     PassContext ctx;
     insertDmaWaits(code, ctx);
     std::string once = printAsm(flatten(code));
@@ -19,7 +22,7 @@ static AsmProgram insert(const std::string& source) {
 }
 
 static AsmProgram optimize(const std::string& source) {
-    Code code = buildBlocks(parseAsm(source));
+    Code code = buildBlocks(parseSource(source));
     PassContext ctx;
     runPasses(code, {}, ctx);
     return flatten(code);
@@ -157,7 +160,7 @@ static void channels_and_boundaries() {
     CHECK(position(sharedSource, "dma.wait.ch0") < position(sharedSource, "dma.store.ch1"));
     safe(stores);
 
-    for (const std::string boundary : {"", "ecall\n", "ebreak\n", "csrrwi x0, x1, 0xC10 # atlas.release\n"}) {
+    for (const std::string boundary : {"", "ecall\n", "ebreak\n", "atlas.complete 1, 0xC10\n"}) {
         AsmProgram result = insert(setup + "dma.load.ch0 x1, x0, x7\n" + boundary);
         CHECK(waits(result, 0) == 1);
         safe(printAsm(result));
@@ -171,7 +174,7 @@ static void channels_and_boundaries() {
 }
 
 static void control_flow() {
-    const std::string release = "csrrwi x0, x1, 0xC10 # atlas.release\n";
+    const std::string release = "atlas.complete 1, 0xC10\n";
     for (int branch : {0, 1}) {
         std::string join = "addi x8, x0, " + std::to_string(branch) + "\nbeq x8, x0, idle\nnop\n"
                            "dma.config.ch2 x0\njal x0, join\nnop\nidle:\naddi x2, x0, 0\njoin:\n";
@@ -192,7 +195,7 @@ static void control_flow() {
 static void preserve_explicit_waits() {
     for (const std::string source : {
              "addi x7, x0, 32\nlui x1, 1\ndma.load.ch0 x1, x0, x7\ndma.wait.ch0\nlw x2, 0(x1)\n",
-             "dma.config.ch0 x0\ndma.wait.ch0\ncsrrwi x0, x1, 0xC10 # atlas.release\n",
+             "dma.config.ch0 x0\ndma.wait.ch0\natlas.complete 1, 0xC10\n",
              "dma.config.ch0 x0\nbeq x1, x0, left\nnop\ndma.wait.ch0\njal x0, end\nnop\nleft:\ndma.wait.ch0\nend:\n"}) {
         CHECK(printAsm(insert(source)) == printAsm(flatten(buildBlocks(parseAsm(source)))));
         safe(source);
@@ -201,7 +204,7 @@ static void preserve_explicit_waits() {
 
 static void correlated_branches() {
     const std::string setup = "addi x7, x0, 32\nlui x1, 1\naddi x10, x0, 0\naddi x11, x0, 3\n";
-    const std::string release = "csrrwi x0, x1, 0xC10 # atlas.release\n";
+    const std::string release = "atlas.complete 1, 0xC10\n";
     for (const std::string op : {"beq", "bne", "blt", "bge", "bltu", "bgeu"}) {
         std::string guarded = setup + op + " x10, x11, skip\nnop\ndma.load.ch0 x1, x0, x7\n"
             "skip:\n" + op + " x10, x11, done\nnop\ndma.wait.ch0\ndone:\n" + release;
@@ -285,7 +288,7 @@ static void preflight() {
     reject("dma.config.ch0 x0\n", {"insert-dma-waits"}, "schedule");
     reject("delay 8\nauipc x1, 0\n", {}, "auipc");
     reject("jal x0, end\ndma.config.ch0 x0\nend:\n", {"insert-dma-waits", "schedule"}, "strip-artifacts");
-    reject("dma.config.ch0 x0\ncsrrwi x0, x1, 0xC10 # atlas.release\n",
+    reject("dma.config.ch0 x0\natlas.complete 1, 0xC10\n",
            {"strip-artifacts", "fill-delay-slots", "schedule"}, "pending DMA");
 }
 

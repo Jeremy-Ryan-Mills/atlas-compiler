@@ -47,7 +47,7 @@ struct Instr {
     std::string target;       // branch / jal label
     std::string comment;      // trailing comment, without the '#'
     bool keep = false;        // "delay N # keep" is never removed by the optimizer
-    bool release = false;     // "atlas.release": complete prior work before this CSR
+    bool release = false;     // "atlas.complete": complete prior work before this CSR
     int line = 0;             // source line, 0 if created by the optimizer
 };
 
@@ -62,8 +62,9 @@ struct ParseError : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
-AsmProgram parseAsm(const std::string& text, const std::string& fileName = "<input>");
-AsmProgram readAsmFile(const std::string& path);
+AsmProgram parseAsm(const std::string& text, const std::string& fileName = "<input>",
+                    bool allowOutputAnnotations = false);
+AsmProgram readAsmFile(const std::string& path, bool allowOutputAnnotations = false);
 std::string formatInstr(const Instr& in);
 std::string printAsm(const AsmProgram& prog);
 

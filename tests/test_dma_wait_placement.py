@@ -65,7 +65,7 @@ def test_same_guard_needs_no_join_wait(
         f'addi x10, x0, {value}\naddi x11, x0, 4\naddi x7, x0, 32\nlui x1, 1\n'
         f'{first} x10, x11, skip\nnop\ndma.load.ch0 x1, x0, x7\n'
         f'skip:\n{second} x10, x11, done\nnop\ndma.wait.ch0\n'
-        'done:\ncsrrwi x0, x1, 0xC10 # atlas.release\necall\n'
+        'done:\ncsrrwi x0, x1, 0xC10 # atlas.complete\necall\n'
     )
     reference = source.replace('done:\n', 'done:\ndma.wait.ch0\n')
     optimized, result = compare_repaired(
@@ -86,7 +86,7 @@ def test_prefetch_only_reaches_waited_backedge(
         'dma.load.ch0 x1, x0, x7\nloop:\ndma.wait.ch0\n'
         'addi x10, x10, 1\nbge x10, x11, skip\nnop\ndma.load.ch0 x1, x0, x7\n'
         'skip:\nblt x10, x11, loop\nnop\n'
-        'csrrwi x0, x1, 0xC10 # atlas.release\necall\n'
+        'csrrwi x0, x1, 0xC10 # atlas.complete\necall\n'
     )
     reference = source.replace('csrrwi', 'dma.wait.ch0\ncsrrwi')
     optimized, result = compare_repaired(
@@ -110,7 +110,7 @@ def test_different_guard_still_requires_completion_wait(
         f'addi x10, x0, {value}\naddi x11, x0, 3\naddi x7, x0, 32\nlui x1, 1\n'
         f'bge x10, x11, skip\n{slot}\ndma.load.ch0 x1, x0, x7\n'
         f'skip:\n{body}{second} x10, x11, done\nnop\ndma.wait.ch0\n'
-        'done:\ncsrrwi x0, x1, 0xC10 # atlas.release\necall\n'
+        'done:\ncsrrwi x0, x1, 0xC10 # atlas.complete\necall\n'
     )
     reference = source.replace('done:\n', 'done:\ndma.wait.ch0\n')
     optimized, result = compare_repaired(
