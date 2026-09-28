@@ -105,7 +105,7 @@ def test_release_completes_mxu_and_preserves_source_lifetime(
         'weight_push': f'vmatpush.weight.{unit} w0, m2',
     }[operation]
     source = instruction + '\ndelay 128\n' + PUBLISH
-    optimized = publication_compiler(source, publication_dir)
+    optimized = publication_compiler(harness.strip_delays(source), publication_dir)
     before = observe_mxu(source, hardware_config_cls, publication_dir / 'reference', unit, operation)
     after = observe_mxu(optimized, hardware_config_cls, publication_dir / 'optimized', unit, operation)
 

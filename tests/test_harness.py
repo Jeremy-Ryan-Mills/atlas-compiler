@@ -1,6 +1,6 @@
 """
-Self-tests: prove the equivalence check passes a no-op and catches both ways an
-optimizer can break a kernel. These run regardless of --atlas-opt.
+Self-tests: prove the equivalence check passes a correct schedule and catches both
+ways an optimizer can break a kernel. These run regardless of --atlas-opt.
 """
 
 import re
@@ -19,29 +19,37 @@ def _check(kernel, optimizer, hardware_config_cls, tmp_path):
     )
 
 
-def test_optimizer_receives_original_source() -> None:
+def test_optimizer_receives_functional_assembly() -> None:
     assert MATMUL.asm_path is not None
     assert MATMUL.asm_path.name == "parameterized_matmul32x32x32.S"
-    assert "loop_1:" in MATMUL.source()
+    assert "loop_1:" in MATMUL.functional_source()
+    assert "delay" in MATMUL.source()
+    assert "delay" not in MATMUL.functional_source()
+    assert "dma.wait" in MATMUL.source()
+    assert "dma.wait" not in MATMUL.functional_source()
+    assert MATMUL.functional_source().startswith("# atlas-fs 0\n")
 
 
-def test_identity_is_equivalent(hardware_config_cls, tmp_path) -> None:
-    before, after = _check(MATMUL, harness.identity_optimizer, hardware_config_cls, tmp_path)
+def test_original_schedule_is_equivalent(hardware_config_cls, tmp_path) -> None:
+    """Handing back npu_model's own hand-scheduled kernel must pass."""
+    before, after = _check(MATMUL, lambda fs, workdir: MATMUL.source(), hardware_config_cls, tmp_path)
     assert before.cycles == after.cycles
-    assert {"dram_output", "vmem"} <= set(before.regions)
+    # Only DRAM is live at exit: the golden output and every input region.
+    assert "dram_output" in before.regions
     assert any(label.startswith("dram_input@") for label in before.regions)
+    assert all(label.startswith("dram_") for label in before.regions)
 
 
 def test_missing_delays_are_caught(hardware_config_cls, tmp_path) -> None:
     with pytest.raises(harness.EquivalenceError, match="raised during simulation"):
-        _check(MATMUL, harness.strip_delays_optimizer, hardware_config_cls, tmp_path)
+        _check(MATMUL, harness.identity_optimizer, hardware_config_cls, tmp_path)
 
 
 def test_silently_wrong_output_is_caught(hardware_config_cls, tmp_path) -> None:
     """A kernel that runs cleanly but never writes its result must still fail."""
 
-    def drop_stores(source, workdir):
-        return re.sub(r"^\s*dma\.store\.ch\d.*$", "", source, flags=re.MULTILINE)
+    def drop_stores(fs, workdir):
+        return re.sub(r"^\s*dma\.store\.ch\d.*$", "", MATMUL.source(), flags=re.MULTILINE)
 
     with pytest.raises(harness.EquivalenceError, match=r"dram_output: \d+/2048 bytes differ"):
         _check(MATMUL, drop_stores, hardware_config_cls, tmp_path)

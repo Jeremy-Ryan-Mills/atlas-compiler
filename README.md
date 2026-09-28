@@ -1,43 +1,58 @@
 # Atlas Compiler
 
-`atlas-opt` reads Atlas NPU assembly, builds a dependency graph for every basic
-block, and reschedules the code so the engines overlap while every dependence and
-hardware rule of npu_model's `rtl-match` branch still holds. It then writes the new
-program with the minimum `delay`s. [PLAN.md](.agents/PLAN.md) has the design and roadmap;
-[OPEN_QUESTIONS.md](.agents/OPEN_QUESTIONS.md) lists what waits until the model is
-confirmed RTL accurate.
+`atlas-opt` turns **functional assembly** into **executable assembly** for the Atlas
+NPU. Functional assembly runs correctly one instruction at a time and knows nothing
+about the microarchitecture: it has no `delay`s, no `dma.wait`s, and a branch takes
+effect immediately (no delay slot). `atlas-opt` builds a dependency graph for every
+basic block, reorders the code so the engines overlap, inserts the DMA waits, fills
+branch delay slots, and adds the minimum `delay`s so that every rule of npu_model's
+`rtl-match` branch holds. [ASSEMBLY_CONTRACT.md](ASSEMBLY_CONTRACT.md) defines both
+formats and who is responsible for what.
+
+In the toolchain: the model compiler produces functional assembly, `atlas-opt`
+turns it into executable assembly, and the performance model runs that.
+[PLAN.md](.agents/notes/PLAN.md) has the design and roadmap;
+[OPEN_QUESTIONS.md](.agents/notes/OPEN_QUESTIONS.md) lists what waits until the model
+is confirmed RTL accurate.
 
 ```sh
-git submodule update --init -- third_party/npu_model
+git submodule update --init -- third_party/npu_model     # npu_model at rtl-match
 cmake -S . -B build -G Ninja && cmake --build build
-build/atlas-opt kernel.S -o kernel.opt.S --viz kernel.html
+scripts/to_functional.py kernel.S -o kernel.fs.S         # hand-scheduled kernel -> functional assembly
+build/atlas-opt kernel.fs.S -o kernel.es.S --viz kernel.html
 ```
-
-Initialize `third_party/atlas-npu` separately for RTL reference.
 
 | Option | What it does |
 |---|---|
-| `-o FILE` | write the optimized program (otherwise it is printed) |
-| `--viz FILE.html` | before/after dependency graph viewer (open it in a browser) |
+| `-o FILE` | write the executable assembly (otherwise it is printed) |
+| `--viz FILE.html` | dependency graph viewer (open it in a browser) |
 | `--passes a,b,c` / `--list-passes` | run only some passes / list them |
-| `--check` | only simulate the input: cycle count and any broken timing rules |
 | `--dma-timing model` | trust npu_model's DMA latency instead of staying valid for any latency |
+| `--check` | only simulate an executable assembly file and report broken timing rules |
 
-After optimizing, atlas-opt simulates the result (at npu_model's DMA speed and with
-slower DMA) and exits with an error if any timing rule is broken. The viewer shows
-each block's dependency graph before and after, with every instruction placed at the
-cycle it issues (one lane per engine). Select an instruction to see what it waits
+Input that still contains `delay`s is rejected, and so are `auipc`, `jalr`, and `jal`
+with a nonzero link register: moving code changes instruction addresses, so nothing
+may depend on them. A file may start with a version header, `# atlas-fs 0`
+(functional) or `# atlas-es 0` (executable). It is optional; a header of the wrong
+kind or for another version is rejected, and the output always starts with
+`# atlas-es 0`. After optimizing, atlas-opt simulates the executable assembly (at
+npu_model's DMA speed and with slower DMA) and exits with an error if any timing rule
+is broken. A halt does not wait for a pending `delay`, so the output ends such a delay
+one cycle early with a `nop` guard. The viewer shows each block's dependency graph
+twice: the input in program order, and the output placed at the cycle each
+instruction issues (one lane per engine). Select an instruction to see what it waits
 for and why.
 
-Optimization supports conditional branches and `jal x0, label`. It rejects
-`jalr`, `jal` with a nonzero link register, and `auipc`, including in delay slots,
-because address relocation is unsupported. Ordinary slot delays require
-`strip-artifacts` (enabled by default); slot delays marked `# keep` and slot
-halts are rejected. `--check` can inspect these instructions without rewriting.
+### DMA waits
 
-Scheduled halts use a NOP guard after delays, including across labels;
-`# keep` preserves the delay immediate. The checker reports unfinished work at
-halt. Robust DMA scheduling reserves remaining port use across waits and gaps.
+The `insert-dma-waits` pass inserts waits before DMA hazards, channel reuse,
+completion signals, and exits, accounting for branches and loops, and assumes the
+DMA queue is idle at entry. Scheduling overlaps independent work with transfers and
+prioritizes waits that unlock useful work. Timing estimates guide placement; actual
+waits enforce completion. Placement is heuristic. Custom pipelines using insertion
+need `schedule`.
+
+### Completion signals
 
 Use `atlas.complete <value>, <CSR>` to signal completion (or, to write a register
 value, use `atlas.complete xN, <CSR>`):
@@ -47,20 +62,15 @@ vstore m0, 0(x0)
 atlas.complete 1, 0xC10
 ```
 
-Immediate values (0–31) emit `csrrwi`; register operands (`xN`) emit `csrrw`.
-Both emit `# atlas.complete` for `--check`. Input must use the `atlas.complete`
-instruction; annotated CSR writes are rejected.
+Immediate values (0–31) emit `csrrwi`; register operands (`xN`) emit `csrrw`. Both
+are tagged `# atlas.complete` in the output, which `--check` reads. Input must use
+the `atlas.complete` instruction; annotated CSR writes are rejected.
 
-Prior fixed-latency work must finish before the CSR executes. Each possibly pending
-DMA channel needs a matching wait on every path to completion and before reuse.
-Completions in delay slots or pipelines without `schedule` are rejected. Preserve
-the exact, case-sensitive, whitespace-delimited token during preprocessing;
-printing retains it for checking the output.
-
-Completions assume idle entry; unmarked CSR behavior is unchanged. Completion provides
-no host acknowledgment, buffer ownership, or IMEM-slot exit proof.
-`--check` checks modeled completion; optimization additionally requires explicit
-DMA waits on every path.
+All earlier work finishes before the CSR executes: fixed-latency work drains, and
+`insert-dma-waits` waits for every DMA channel that may still be busy. A completion
+requires the `schedule` pass. Completions assume nothing is running when the program
+starts, and plain CSR writes are not completion signals. A completion gives no host
+acknowledgment, buffer ownership, or proof that execution left an IMEM slot.
 
 ## Layout
 
@@ -69,33 +79,38 @@ DMA waits on every path.
 | `src/core/` | Everything about programs and the machine: assembly parsing and printing (`asm`), basic blocks (`blocks`), known register values (`values`), the rtl-match timing rules (`machine`, `reservations`), dependency graphs (`depgraph`), and a timing simulator whose cycle counts match npu_model's (`simulator`) |
 | `src/passes/` | The optimization passes, one file each, plus `registry.cpp` listing them in order. **See [src/passes/README.md](src/passes/README.md) to add a pass.** |
 | `src/tool/` | The `atlas-opt` command line and the HTML viewer |
+| `scripts/` | `to_functional.py`: turns hand-scheduled assembly into functional assembly (removes `delay`s and `dma.wait`s, adds the header) |
 | `tests/` | C++ timing tests and Python equivalence and regression tests |
 
 ## Equivalence tests
 
-`tests/` also has a pytest harness that runs every kernel registered in
-`third_party/npu_model` (a submodule on its `rtl-match` branch) before and after
-optimization. It fails if the optimized kernel errors (e.g. breaks a timing rule),
-doesn't finish, or leaves different bytes in the kernel's DRAM output, its DRAM
-inputs, or VMEM.
+`tests/` also has a pytest harness. For every kernel registered in
+`third_party/npu_model` (a submodule on its `rtl-match` branch), it runs npu_model's
+hand-scheduled kernel, turns it into functional assembly with
+`scripts/to_functional.py` (no delays, no DMA waits), hands that to the optimizer,
+and runs the executable assembly it returns. It fails if that errors (e.g. breaks a
+timing rule), doesn't finish, or leaves different bytes in the kernel's DRAM output
+or DRAM inputs. Only DRAM is live at exit, so nothing else is compared. The cycle
+table printed at the end compares against the hand-scheduled kernels.
 
 ```sh
 python -m pytest                              # uses build/atlas-opt if it exists
-python -m pytest --atlas-opt=identity         # compare unchanged kernels
-python -m pytest --atlas-opt=strip-delays     # exercise missing-delay detection
+python -m pytest --atlas-opt=identity         # harness sanity check: everything fails
 ```
 
 Run it with a Python that has npu_model's dependencies: `uv run pytest` (using this
 repo's `pyproject.toml`), or `~/Projects/npu_model/.venv/bin/python -m pytest`.
 The optimizer is invoked as `<cmd> in.S -o out.S` (settable via `--atlas-opt` /
 `$ATLAS_OPT`, extra flags via `--atlas-opt-args` / `$ATLAS_OPT_ARGS`).
-`--artifacts-dir DIR` keeps each kernel's `before.S`/`after.S`, and `--max-cycles`
-sets the cycle budget. A before→after cycle table is printed at the end.
-`SmolVLARmsNormProgram` has a known baseline golden-output failure. Built-in
-optimizers skip compiler-specific tests; harness self-tests run independently
-of `--atlas-opt`.
+`--artifacts-dir DIR` keeps each kernel's `original.S`, `functional.S` and
+`executable.S`, and `--max-cycles` sets the cycle budget.
+`SmolVLARmsNormProgram` fails as a BASELINE error: on rtl-match, the unmodified
+kernel already misses its golden output.
 
-`tests/test_regressions.py` covers relocation, both branch paths, halt guards,
-and variable DMA latency. `tests/test_publication*.py` checks data and engine
-state at the expected completion signal, including MXU source reuse, branches,
-loops, and DMA channel reuse. C++ tests check timing, metadata, and reservations.
+`tests/test_regressions.py` covers relocation, both branch paths, halt guards, and
+variable DMA latency. `tests/test_publication*.py` checks DRAM, and that no engine is
+still busy, at the expected completion signal, including MXU source reuse, branches,
+loops, and DMA channel reuse. `tests/test_dma_wait_*.py` checks wait insertion and
+placement. These tests also compare DRAM only: a test that checks data left in VMEM
+or a register first copies it to DRAM in the program itself. C++ tests check timing,
+metadata, and reservations.

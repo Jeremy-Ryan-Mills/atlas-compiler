@@ -2,7 +2,9 @@
 // Add tests for a new pass at the bottom, next to the other pass tests.
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <functional>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -47,12 +49,46 @@ static int distanceBetween(const std::string& first, const std::string& second) 
 
 static long long simulatedCycles(const std::string& text) { return simulate(parseAsm(text)).cycles; }
 
-// Runs the full pass pipeline (or just `passes`) and returns the flattened result.
+// Turns hand-scheduled (executable) assembly into functional assembly, like scripts/to_functional.py.
+static std::string stripDelays(const std::string& text) {
+    std::istringstream in(text);
+    std::string out, line;
+    while (std::getline(in, line))
+        if (line.find_first_not_of(" \t") == std::string::npos || line.compare(line.find_first_not_of(" \t"), 5, "delay") != 0)
+            out += line + "\n";
+    return out;
+}
+
+// Runs the full pass pipeline (or just `passes`) on functional assembly and returns
+// the executable assembly.
 static AsmProgram optimize(const AsmProgram& in, const std::vector<std::string>& passes = {}) {
     Code code = buildBlocks(in);
     PassContext ctx;
     runPasses(code, passes, ctx);
     return flatten(code);
+}
+
+static bool headerRejected(const std::string& text, AsmKind kind) {
+    try {
+        checkVersionHeader(text, kind);
+    } catch (const ParseError&) {
+        return true;
+    }
+    return false;
+}
+
+TEST(version_header_is_optional_but_checked) {
+    CHECK(versionHeader(AsmKind::Functional) == "# atlas-fs 0\n");
+    CHECK(versionHeader(AsmKind::Executable) == "# atlas-es 0\n");
+    CHECK(!headerRejected("addi x1, x0, 1\n", AsmKind::Functional));  // no header
+    CHECK(!headerRejected("\n# atlas-fs 0\naddi x1, x0, 1\n", AsmKind::Functional));
+    CHECK(!headerRejected("# atlas-es 0\n", AsmKind::Executable));
+    CHECK(!headerRejected("# a comment\n# atlas-es 0\n", AsmKind::Functional));  // only the first line counts
+    CHECK(headerRejected("# atlas-es 0\n", AsmKind::Functional));  // wrong kind
+    CHECK(headerRejected("# atlas-fs 0\n", AsmKind::Executable));
+    CHECK(headerRejected("# atlas-fs 1\n", AsmKind::Functional));  // other version
+    // The parser treats the header as a comment.
+    CHECK_EQ(parseAsm(versionHeader(AsmKind::Functional) + "addi x1, x0, 1\n").instrs.size(), 1u);
 }
 
 TEST(parse_and_print_round_trip) {
@@ -156,11 +192,30 @@ TEST(scheduler_overlaps_independent_engines) {
         "delay 95\n"
         "vadd.bf16 m4, m0, m2\n"
         "delay 66\n";
-    AsmProgram in = parseAsm(text);
-    AsmProgram out = optimize(in);
-    SimResult before = simulate(in), after = simulate(out);
+    AsmProgram handScheduled = parseAsm(text);
+    AsmProgram out = optimize(parseAsm(stripDelays(text)));
+    SimResult before = simulate(handScheduled), after = simulate(out);
     CHECK(after.violations.empty());
     CHECK(after.cycles < before.cycles);
+}
+
+TEST(input_with_delays_is_rejected) {
+    bool rejected = false;
+    try {
+        optimize(parseAsm("addi x1, x0, 1\ndelay 3\naddi x2, x1, 1\n"));
+    } catch (const std::runtime_error&) {
+        rejected = true;
+    }
+    CHECK(rejected);
+}
+
+TEST(functional_branches_have_no_delay_slot) {
+    // In functional assembly the addi after the branch runs only when the loop exits,
+    // so it must not end up in the executable branch's delay slot.
+    AsmProgram out = optimize(parseAsm("addi x2, x0, 3\nloop:\naddi x1, x1, 1\nblt x1, x2, loop\naddi x3, x3, 5\n"));
+    for (size_t i = 0; i + 1 < out.instrs.size(); i++)
+        if (out.instrs[i].op->name == "blt") CHECK(formatInstr(out.instrs[i + 1]) != "addi x3, x3, 5");
+    CHECK(simulate(out).violations.empty());
 }
 
 TEST(schedules_stay_valid_when_dma_is_slower) {
@@ -181,31 +236,13 @@ TEST(schedules_stay_valid_when_dma_is_slower) {
     }
 }
 
-TEST(delay_slot_motion_preserves_link_dependencies) {
-    // Test directly; the full pipeline rejects link addresses.
-    for (const std::string slot : {"addi x2, x1, 7", "addi x1, x0, 17"}) {
-        Code code = buildBlocks(parseAsm("jal x1, target\n" + slot + "\ntarget:\nsw x1, 0(x0)\n"));
-        PassContext ctx;
-        stripArtifacts(code, ctx);
-        CHECK(code.blocks[0].slot.has_value());
-        CHECK(code.blocks[0].body.empty());
-    }
-    Code independent = buildBlocks(parseAsm("jal x0, target\naddi x2, x0, 17\ntarget:\nsw x2, 0(x0)\n"));
-    PassContext ctx;
-    stripArtifacts(independent, ctx);
-    CHECK(!independent.blocks[0].slot.has_value());
-    CHECK_EQ(independent.blocks[0].body.size(), 1u);
-}
-
 TEST(unrelocatable_control_flow_is_rejected_before_mutation) {
     for (const std::string source : {
-             "delay 10\njalr x0, x1, 0\nnop\n",
-             "delay 10\njal x1, target\nnop\ntarget:\naddi x2, x0, 17\n",
-             "delay 10\nauipc x1, 0\n",
-             "delay 10\nbeq x0, x0, target\nauipc x1, 0\ntarget:\nsw x1, 0(x0)\n",
-             "delay 10\nbeq x0, x0, target\ndelay 1 # keep\ntarget:\nsw x1, 0(x0)\n",
-             "delay 10\nbeq x0, x0, target\necall\ntarget:\nsw x1, 0(x0)\n",
-             "delay 10\nbeq x0, x0, target\nebreak\ntarget:\nsw x1, 0(x0)\n"}) {
+             "nop\njalr x0, x1, 0\nnop\n",
+             "nop\njal x1, target\nnop\ntarget:\naddi x2, x0, 17\n",
+             "nop\nauipc x1, 0\n",
+             "nop\nbeq x0, x0, target\nauipc x1, 0\ntarget:\nsw x1, 0(x0)\n",
+             "nop\nbeq x0, x0, target\ndelay 1\ntarget:\nsw x1, 0(x0)\n"}) {
         Code code = buildBlocks(parseAsm(source));
         std::string before = printAsm(flatten(code));
         PassContext ctx;
@@ -216,19 +253,6 @@ TEST(unrelocatable_control_flow_is_rejected_before_mutation) {
         CHECK(printAsm(flatten(code)) == before);
         CHECK(ctx.log.empty());
     }
-}
-
-TEST(artifact_delay_slots_require_the_stripping_pass) {
-    const std::string source = "beq x0, x0, target\ndelay 8\ntarget:\naddi x1, x0, 17\n";
-    AsmProgram out = optimize(parseAsm(source));
-    CHECK(simulate(out).violations.empty());
-    Code code = buildBlocks(parseAsm(source));
-    PassContext ctx;
-    bool rejected = false;
-    try { runPasses(code, {"schedule"}, ctx); }
-    catch (const std::runtime_error&) { rejected = true; }
-    CHECK(rejected);
-    CHECK(ctx.log.empty());
 }
 
 TEST(dma_wait_reserves_gaps_in_live_port_windows) {
@@ -279,10 +303,11 @@ TEST(repeated_dma_waits_preserve_unit_capacity_counts) {
 }
 
 TEST(robust_schedule_survives_dma_stalls_between_read_bursts) {
-    AsmProgram original = parseAsm(
-        "vredsum.bf16 m4, m0\ndma.config.ch0 x5\ndelay 26 # keep\n"
-        "dma.wait.ch0\ndelay 140\naddi x5, x0, 0\nvstore m32, 0(x5)\n");
-    AsmProgram optimized = optimize(original);
+    std::string text =
+        "vredsum.bf16 m4, m0\ndma.config.ch0 x5\ndelay 26\n"
+        "dma.wait.ch0\ndelay 140\naddi x5, x0, 0\nvstore m32, 0(x5)\n";
+    AsmProgram original = parseAsm(text);
+    AsmProgram optimized = optimize(parseAsm(stripDelays(text)));
     for (double scale : {0.1, 0.5, 1.0, 1.7, 3.0, 10.0, 100.0}) {
         SimOptions options;
         options.dmaLatencyScale = scale;
@@ -307,7 +332,7 @@ TEST(halt_stops_before_delay_stalls_and_does_not_retire) {
         CHECK_EQ(result.cycles, 6);
         CHECK_EQ(result.issued, 3);
         CHECK(result.violations.empty());
-        CHECK(printAsm(optimize(safe)) == printAsm(safe));
+        CHECK(printAsm(optimize(parseAsm(stripDelays(printAsm(safe))))) == printAsm(safe));
     }
     // Completion on the halt tick is safe.
     SimResult sameTick = simulate(parseAsm("sw x1, 0(x0)\necall\n"));
@@ -317,15 +342,13 @@ TEST(halt_stops_before_delay_stalls_and_does_not_retire) {
     CHECK_EQ(simulatedCycles("delay 5\n"), 7);
 }
 
-TEST(halt_guards_cover_block_boundaries_kept_delays_and_long_waits) {
+TEST(halt_guards_cover_block_boundaries_and_long_waits) {
     for (const std::string halt : {"ecall", "ebreak"}) {
-        for (const std::string delay : {"", "delay 100 # keep\n", "delay 4095 # keep\n"}) {
-            AsmProgram out = optimize(parseAsm("lw x1, 0(x0)\n" + delay + "exit:\n" + halt + "\n"));
-            CHECK(isNop(out.instrs[out.instrs.size() - 2]));
-            CHECK(out.labels[out.instrs.size() - 1] == std::vector<std::string>{"exit"});
-            CHECK(simulate(out).violations.empty());
-            CHECK(printAsm(optimize(out)) == printAsm(out));
-        }
+        AsmProgram out = optimize(parseAsm("lw x1, 0(x0)\nexit:\n" + halt + "\n"));
+        CHECK(isNop(out.instrs[out.instrs.size() - 2]));
+        CHECK(out.labels[out.instrs.size() - 1] == std::vector<std::string>{"exit"});
+        CHECK(simulate(out).violations.empty());
+        CHECK(printAsm(optimize(parseAsm(stripDelays(printAsm(out))))) == printAsm(out));
     }
     Block b;
     b.body = {makeInstr("lw", 1)};
@@ -341,12 +364,6 @@ TEST(halt_guards_cover_block_boundaries_kept_delays_and_long_waits) {
     CHECK(simulate(out).violations.empty());
     for (const Instr& in : out.instrs)
         if (in.op->opClass == OpClass::Delay) CHECK(in.imm >= 0 && in.imm <= 4095);
-
-    Code labeled = buildBlocks(parseAsm("delay 100 # keep\nempty:\nnop\nexit:\necall\n"));
-    PassContext ctx;
-    runPasses(labeled, {}, ctx);
-    CHECK_EQ(labeled.blocks[0].endCycle, 102);
-    CHECK_EQ(simulate(flatten(labeled)).cycles, 104);
 }
 
 TEST(all_rtl_match_kernels) {
@@ -361,9 +378,12 @@ TEST(all_rtl_match_kernels) {
         count++;
         std::string name = entry.path().filename().string();
         try {
-            AsmProgram in = readAsmFile(entry.path().string());
-            AsmProgram out = optimize(in);
-            SimResult before = simulate(in), after = simulate(out);
+            std::ifstream file(entry.path());
+            std::stringstream text;
+            text << file.rdbuf();
+            AsmProgram handScheduled = parseAsm(text.str(), name);
+            AsmProgram out = optimize(parseAsm(stripDelays(text.str()), name));
+            SimResult before = simulate(handScheduled), after = simulate(out);
             SimOptions slow;
             slow.dmaLatencyScale = 2.0;
             SimResult afterSlow = simulate(out, slow);

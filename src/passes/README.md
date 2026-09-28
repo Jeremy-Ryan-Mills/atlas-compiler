@@ -1,6 +1,9 @@
 # Writing an optimization pass
 
-A pass is one function that rewrites the program's basic blocks in place:
+atlas-opt's input is functional assembly: no `delay`s, no `dma.wait`s (the
+`insert-dma-waits` pass adds them), and a branch takes effect immediately (no delay
+slot). A pass is one function that rewrites the program's
+basic blocks in place:
 
 ```cpp
 void myPass(Code& code, PassContext& ctx);
@@ -8,8 +11,9 @@ void myPass(Code& code, PassContext& ctx);
 
 Passes run in the order listed in `registry.cpp`. `schedule` always runs last: it
 reorders each block, picks every instruction's issue cycle, and chooses the
-`delay`s. **So a pass never has to think about timing.** It only has to keep the
-program's meaning when the instructions run one at a time, in order.
+`delay`s, and `flatten()` gives every branch its delay slot. **So a pass never has
+to think about timing.** It only has to keep the program's meaning when the
+instructions run one at a time, in order.
 
 ## What you work with
 
@@ -32,11 +36,11 @@ program's meaning when the instructions run one at a time, in order.
    that depends on it.
 2. **Keep the block structure** (labels, terminators, successors) unless the pass
    is about control flow. If it is, update `succs` too.
-3. **The delay slot runs on both paths**, after the branch: when the branch is
-   taken and when it isn't.
+3. **Delay slots exist only in the output.** A pass that fills `Block::slot` must
+   remember that the slot runs after the branch on both paths, taken or not.
 4. **Only DRAM is live when the program ends.** Registers, VMEM, weight slots, and
    accumulators may be changed or dropped if no later `dma.store` needs them.
-5. **Don't rely on anything in [OPEN_QUESTIONS.md](../../.agents/OPEN_QUESTIONS.md).** Use
+5. **Don't rely on anything in [OPEN_QUESTIONS.md](../../.agents/notes/OPEN_QUESTIONS.md).** Use
    the conservative choice listed there.
 6. **Report what you did** with one line in `ctx.log`.
 
@@ -65,15 +69,16 @@ program's meaning when the instructions run one at a time, in order.
 3. Add it to the list in `registry.cpp`, somewhere before `schedule`:
    `{"my-pass", "what it does", myPass},`
 4. Add a test to `tests/tests.cpp`. Build a small program with `parseAsm`, run
-   `optimize(program, {"strip-artifacts", "my-pass", "schedule"})`, and check the
+   `optimize(program, {"remove-nops", "my-pass", "schedule"})`, and check the
    result: its instructions, and `simulate(result)` (fewer cycles, no violations).
 5. Check it on every kernel:
 
    ```sh
    cmake --build build && build/atlas-tests                 # unit tests + all kernels in our simulator
    ~/Projects/npu_model/.venv/bin/python -m pytest          # equivalence on npu_model (rtl-match)
-   build/atlas-opt kernel.S --viz kernel.html               # see what the pass changed
+   build/atlas-opt kernel.fs.S --viz kernel.html            # see what the pass changed
    ```
 
-   While developing, `build/atlas-opt kernel.S --passes strip-artifacts,my-pass,schedule`
-   runs only the passes you name.
+   While developing, `build/atlas-opt kernel.fs.S --passes my-pass,schedule` runs only
+   the passes you name. Make functional assembly from a hand-scheduled kernel with
+   `scripts/to_functional.py kernel.S -o kernel.fs.S`.

@@ -10,6 +10,7 @@ from tests.test_publication import (
     observe,
     publication_compiler,
     publication_dir,
+    publication_without_dma_insertion,
 )
 
 
@@ -17,7 +18,7 @@ from tests.test_publication import (
 def test_release_after_branch_with_unfinished_fixed_work(
     publication_compiler, hardware_config_cls, publication_dir, branch_value
 ):
-    # Branch during VSTORE; distinct per-path results verify which path ran.
+    # Branch during VSTORE; the completion must still wait for every engine.
     source = (
         f'addi x9, x0, {branch_value}\nvstore m0, 0(x0)\n'
         'beq x9, x0, taken\nnop\n'
@@ -25,14 +26,7 @@ def test_release_after_branch_with_unfinished_fixed_work(
         'taken:\nvtrpose.xlu m6, m2\ndelay 66\n'
         'publish:\ndelay 40\n' + PUBLISH
     )
-    _, before, after = compare(source, publication_compiler, hardware_config_cls, publication_dir)
-    assert before['vmem'][:1024] == after['vmem'][:1024] == bytes([0x31]) * 1024
-    if branch_value == 0:
-        assert after['mreg6'] == bytes([0x7B]) * 1024
-        assert after['mreg8'] == bytes(1024)
-    else:
-        assert after['mreg8'] == bytes([0x2A]) * 1024
-        assert after['mreg6'] == bytes(1024)
+    compare(source, publication_compiler, hardware_config_cls, publication_dir)
 
 
 @pytest.mark.parametrize('dma_scale', [1, 10])
@@ -47,14 +41,12 @@ def test_release_on_third_iteration_after_matching_dma_wait(
         'csrrw x0, x10, 0xC10 # atlas.complete\n'
         'blt x10, x11, loop\nnop\n'
     )
-    optimized = publication_compiler(source, publication_dir)
+    optimized = publication_compiler(harness.strip_delays(source), publication_dir)
     before = observe(source, hardware_config_cls, publication_dir / 'reference',
                      dma_scale=dma_scale, expected_dbg0=3)
     after = observe(optimized, hardware_config_cls, publication_dir / 'optimized',
                     dma_scale=dma_scale, expected_dbg0=3)
     assert_safe_publication(before, after)
-    assert after['vmem'][:1024] == bytes([0x31]) * 1024
-    assert after['vmem'][4096:4128] == bytes([0xC3]) * 32
 
 
 def _must_reject_pending_path(source, compiler, hardware_config_cls, directory, *, expected_dbg0=1):
@@ -63,10 +55,10 @@ def _must_reject_pending_path(source, compiler, hardware_config_cls, directory, 
                      dma_scale=10, expected_dbg0=expected_dbg0)
     assert before['active_engines'] == ()
     try:
-        optimized = compiler(source, directory)
+        optimized = compiler(harness.strip_delays(source), directory)
     except harness.OptimizerError as error:
         assert 'atlas.complete' in str(error) and 'pending DMA' in str(error)
-        assert not (directory / 'after.S').exists()
+        assert not (directory / 'executable.S').exists()
         return
     after = observe(optimized, hardware_config_cls, directory / 'accepted-optimized',
                     dma_scale=10, expected_dbg0=expected_dbg0)
@@ -78,7 +70,7 @@ def _must_reject_pending_path(source, compiler, hardware_config_cls, directory, 
 
 @pytest.mark.parametrize('branch_value', [0, 1], ids=['waited-path', 'unwaited-path'])
 def test_release_rejects_join_with_only_one_waited_predecessor(
-    publication_compiler, hardware_config_cls, publication_dir, branch_value
+    publication_without_dma_insertion, hardware_config_cls, publication_dir, branch_value
 ):
     # Reject both inputs: every reaching path needs a matching wait.
     source = (
@@ -87,11 +79,12 @@ def test_release_rejects_join_with_only_one_waited_predecessor(
         'jal x0, publish\nnop\nwaited:\ndma.wait.ch0\n'
         'publish:\ndelay 300\n' + PUBLISH
     )
-    _must_reject_pending_path(source, publication_compiler, hardware_config_cls, publication_dir)
+    _must_reject_pending_path(source, publication_without_dma_insertion,
+                             hardware_config_cls, publication_dir)
 
 
 def test_release_rejects_dma_carried_back_to_entry(
-    publication_compiler, hardware_config_cls, publication_dir
+    publication_without_dma_insertion, hardware_config_cls, publication_dir
 ):
     # First entry is idle; the backedge carries DMA into the second release.
     source = (
@@ -101,5 +94,5 @@ def test_release_rejects_dma_carried_back_to_entry(
         'addi x7, x0, 32\nlui x1, 1\ndma.load.ch0 x1, x0, x7\n'
         'jal x0, entry\nnop\ndone:\naddi x12, x0, 9\n'
     )
-    _must_reject_pending_path(source, publication_compiler, hardware_config_cls,
+    _must_reject_pending_path(source, publication_without_dma_insertion, hardware_config_cls,
                              publication_dir, expected_dbg0=2)

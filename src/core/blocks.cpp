@@ -40,16 +40,7 @@ Code buildBlocks(const AsmProgram& prog) {
     for (int i = 0; i < n; i++) {
         const OpInfo& op = *prog.instrs[i].op;
         if (!prog.labels[i].empty()) leaders.insert(i);
-        if (isControlFlow(op)) {
-            if (i + 1 < n && !prog.labels[i + 1].empty())
-                throw ParseError("line " + std::to_string(prog.instrs[i + 1].line) +
-                                 ": a label on a delay-slot instruction is not supported");
-            if (i + 1 < n && isControlFlow(*prog.instrs[i + 1].op))
-                throw ParseError("line " + std::to_string(prog.instrs[i + 1].line) +
-                                 ": branch or jump in a delay slot is illegal");
-            leaders.insert(i + 2);
-        }
-        if (op.opClass == OpClass::Halt) leaders.insert(i + 1);
+        if (isControlFlow(op) || op.opClass == OpClass::Halt) leaders.insert(i + 1);
     }
 
     Code code;
@@ -61,16 +52,8 @@ Code buildBlocks(const AsmProgram& prog) {
         b.labels = prog.labels[begin];
         for (int i = begin; i < end; i++) {
             const Instr& in = prog.instrs[i];
-            if (isControlFlow(*in.op)) {
-                b.terminator = in;
-                if (i + 1 < end) b.slot = prog.instrs[i + 1];
-                break;
-            }
-            if (in.op->opClass == OpClass::Halt) {
-                b.terminator = in;
-                break;
-            }
-            b.body.push_back(in);
+            if (isControlFlow(*in.op) || in.op->opClass == OpClass::Halt) b.terminator = in;
+            else b.body.push_back(in);
         }
         code.blocks.push_back(b);
     }
@@ -148,8 +131,8 @@ AsmProgram flatten(const Code& code) {
     for (const std::string& l : code.endLabels) labelsAt.back().push_back(l);
     prog.labels = labelsAt;
 
-    // Halt bypasses delay stalls; guard it with a NOP, preserving kept delays.
-    // Join blocks first to cover labeled fallthrough halts.
+    // A halt does not wait for a pending delay, so end the delay one cycle early with a NOP.
+    // Blocks are joined first so this also covers halts reached by falling through a label.
     if (scheduled) {
         AsmProgram guarded;
         for (size_t i = 0; i < prog.instrs.size(); i++) {
@@ -158,11 +141,9 @@ AsmProgram flatten(const Code& code) {
             if (in.op->opClass == OpClass::Delay && i + 1 < prog.instrs.size() &&
                 prog.instrs[i + 1].op->opClass == OpClass::Halt) {
                 int idle = naturalGap(in);
-                if (idle > 1 || in.keep) {
-                    if (!in.keep) {
-                        in.imm = idle - 2;
-                        in.immText.clear();
-                    }
+                if (idle > 1) {
+                    in.imm = idle - 2;
+                    in.immText.clear();
                     guarded.instrs.push_back(in);
                     guarded.labels.emplace_back();
                 }

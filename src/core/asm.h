@@ -46,7 +46,6 @@ struct Instr {
     std::string immText;      // immediate as written in the source, reused when printing
     std::string target;       // branch / jal label
     std::string comment;      // trailing comment, without the '#'
-    bool keep = false;        // "delay N # keep" is never removed by the optimizer
     bool release = false;     // "atlas.complete": complete prior work before this CSR
     int line = 0;             // source line, 0 if created by the optimizer
 };
@@ -64,7 +63,18 @@ struct ParseError : std::runtime_error {
 
 AsmProgram parseAsm(const std::string& text, const std::string& fileName = "<input>",
                     bool allowOutputAnnotations = false);
-AsmProgram readAsmFile(const std::string& path, bool allowOutputAnnotations = false);
+
+// Functional assembly (atlas-opt's input) or executable assembly (its output). A file
+// may start with a version header naming its kind, `# atlas-fs 0` or `# atlas-es 0`.
+enum class AsmKind { Functional, Executable };
+const int kAssemblyVersion = 0;
+std::string versionHeader(AsmKind kind);  // "# atlas-fs 0\n" or "# atlas-es 0\n"
+// Throws ParseError if `text` starts with a header for the other kind or another version.
+void checkVersionHeader(const std::string& text, AsmKind kind, const std::string& fileName = "<input>");
+
+// Reads and checks a file. Executable assembly may carry output annotations
+// (`# atlas.complete`); functional assembly may not.
+AsmProgram readAsmFile(const std::string& path, AsmKind kind = AsmKind::Functional);
 std::string formatInstr(const Instr& in);
 std::string printAsm(const AsmProgram& prog);
 
