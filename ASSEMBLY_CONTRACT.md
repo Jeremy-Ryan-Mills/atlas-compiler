@@ -63,9 +63,7 @@ accumulators may differ. (The tests are stricter today; see §4, item 5.)
 
 atlas-opt rejects address-dependent instructions and ISA violations with the line
 number. It cannot detect a program that is wrong when run one instruction at a time;
-the equivalence harness catches that. For today's hand-scheduled kernels, it also
-removes existing `delay`s (keeping `delay N # keep`) and keeps any `dma.wait` it
-finds.
+the equivalence harness catches that.
 
 ## 3. Responsibilities
 
@@ -90,7 +88,7 @@ finds.
 | No-ops | may leave them | removes filler no-ops |
 | Numerics (goldens, tolerances) | owns | no change |
 | FS correctness | checked against the golden reference (functional model owner TBD) | nothing |
-| ES equivalent to FS | nothing | checked on npu_model: the equivalence harness, and wait insertion against explicit-wait references at 1x and 100x DMA latency |
+| ES equivalent to FS | nothing | checked on npu_model by the equivalence harness and the wait-insertion tests (at 1x and 100x DMA latency) |
 
 **Rule of thumb:** changing *which* operations run on *which* data belongs to model
 mapping. Changing only *when* they run, or which interchangeable resource they use,
