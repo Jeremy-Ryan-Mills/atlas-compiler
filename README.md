@@ -36,6 +36,7 @@ The [MXU0 projection](docs/rtlgraph-mxu0.md) independently extracts overwrite ac
 | `--schedule-priority critical\|input` | choose critical-path priority (default) or input order among ready, resource-legal instructions |
 | `--experimental-mxu1-profile FILE` | load the optional partial MXU1 timing/resource projection; other rules remain built in |
 | `--experimental-mxu0-profile FILE` | load the optional MXU0 accumulator-read projection; may compose with an MXU1 profile from the same hardware IR |
+| `--rtl-dma-profile FILE` | extend the model with RTL DMA capture, address, and explicit-completion rules; requires robust timing |
 
 After optimizing, atlas-opt simulates the result (at npu_model's DMA speed and with
 slower DMA) and exits with an error if any timing rule is broken. The viewer shows
@@ -70,6 +71,14 @@ Releases assume idle entry; unmarked CSR behavior is unchanged. A release provid
 no host acknowledgment, buffer ownership, or IMEM-slot exit proof.
 `--check` checks modeled completion; optimization additionally requires explicit
 DMA waits on every path.
+
+The [native RTL DMA guide](docs/rtlgraph-dma-native.md) extends this same compiler
+integration to issue-captured DMA operands, scalar `DMA.CONFIG`, VMEM word pointers,
+and explicit completion lifetimes. The selected profile requires matching waits
+within each basic block and rejects pending DMA across block boundaries. It uses
+minimum issue spacing and reservations widened over waits for checking; compiler
+cycle counts remain estimates. The default model and existing MXU profiles remain
+available. No automatic wait-insertion pass is added.
 
 ## Layout
 

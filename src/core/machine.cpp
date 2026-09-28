@@ -365,28 +365,43 @@ Footprint footprintOf(const Instr& in, const RegValues& regs, const MachineModel
 
         case OpClass::DmaLoad:
         case OpClass::DmaStore: {
-            // The model reads the DMA's registers and moves the data when the transfer completes.
             bool load = op.opClass == OpClass::DmaLoad;
             int vmemReg = load ? in.rd : in.rs1;
             auto addr = reg(regs, vmemReg);
             auto bytes = reg(regs, in.rs2);
-            b.x(in.rd, false, 0, true);
-            b.x(in.rs1, false, 0, true);
-            b.x(in.rs2, false, 0, true);
+            // RTL captures scalar fields at launch. The inherited model reads
+            // them at completion; keep that interface unchanged by default.
+            b.x(in.rd, false, 0, !model.rtlDma);
+            b.x(in.rs1, false, 0, !model.rtlDma);
+            b.x(in.rs2, false, 0, !model.rtlDma);
             Access base{Res::DmaBase, false, 0, 1, 0, 1};
-            base.atCompletion = true;
+            base.atCompletion = !model.rtlDma;
             b.f.accesses.push_back(base);
+            if (model.rtlDma) {
+                auto dram = reg(regs, load ? in.rs1 : in.rd);
+                if (addr && (*addr & 7)) b.f.error = "RTL DMA VMEM word address must be 8-word aligned";
+                if (dram && *dram % kLineBytes) b.f.error = "RTL DMA DRAM address must be 32-byte aligned";
+                if (bytes && (*bytes < kLineBytes || *bytes > 4096 || *bytes % kLineBytes))
+                    b.f.error = "RTL DMA size must be a multiple of 32 bytes in 32..4096";
+                if (addr) addr = ((*addr >> 3) & 0xFFFF) * kLineBytes;
+                // DRAM base values are not represented in RegValues. Treat all
+                // DRAM transfers as possible aliases: load/load can overlap,
+                // while a store requires the other transfer's explicit wait.
+                Access memory{Res::Dram, !load, 0, 1, 0, 0};
+                memory.anywhere = memory.atCompletion = true;
+                b.f.accesses.push_back(memory);
+            }
             b.vmem(addr, bytes, load, 0, 0, true);
-            if (addr && (*addr % 32 != 0)) b.f.error = "DMA VMEM address must be 32-byte aligned";
+            if (!model.rtlDma && addr && (*addr % 32 != 0)) b.f.error = "DMA VMEM address must be 32-byte aligned";
             b.f.dmaCycles = dmaTransferCycles(bytes ? *bytes : 1024);  // unknown size: guess one tile
             break;
         }
         case OpClass::DmaConfig: {
-            b.x(in.rs1, false, 0, true);
+            b.x(in.rs1, false, 0, !model.rtlDma);
             Access base{Res::DmaBase, true, 0, 1, 0, 1};
-            base.atCompletion = true;
+            base.atCompletion = !model.rtlDma;
             b.f.accesses.push_back(base);
-            b.f.dmaCycles = dmaTransferCycles(0);  // npu_model sizes it from x0: 4 cycles
+            if (!model.rtlDma) b.f.dmaCycles = dmaTransferCycles(0);  // inherited completion-time configuration
             break;
         }
     }
@@ -413,6 +428,7 @@ static std::string elementName(Res res, int element) {
             return buf;
         }
         case Res::DmaBase: return "dma.base";
+        case Res::Dram: return "DRAM (address may alias)";
     }
     return "?";
 }
@@ -437,7 +453,8 @@ static int dataDistance(const Access& x, const Access& y, int& element) {
 
 static bool contains(const std::vector<int>& v, int x) { return std::find(v.begin(), v.end(), x) != v.end(); }
 
-Dependence dependence(const Instr& a, const Footprint& fa, const Instr& b, const Footprint& fb) {
+Dependence dependence(const Instr& a, const Footprint& fa, const Instr& b, const Footprint& fb,
+                      const MachineModel& model) {
     Dependence best;
     auto consider = [&](int d, EdgeKind kind, const std::string& why) {
         if (d > best.distance) best = {d, kind, why};
@@ -452,7 +469,8 @@ Dependence dependence(const Instr& a, const Footprint& fa, const Instr& b, const
         consider(fa.doneAge + 1, EdgeKind::Order, "atlas.release waits for prior fixed-latency work to complete");
 
     // DMA commands leave the queue in issue order; waits stay ordered with their channel.
-    if (A.engine == Engine::Dma && B.engine == Engine::Dma) {
+    if (A.engine == Engine::Dma && B.engine == Engine::Dma &&
+        (!model.rtlDma || (A.opClass != OpClass::DmaConfig && B.opClass != OpClass::DmaConfig))) {
         bool aWait = A.opClass == OpClass::DmaWait, bWait = B.opClass == OpClass::DmaWait;
         if (!aWait && !bWait) consider(1, EdgeKind::Order, "DMA queue order");
         else if (A.channel == B.channel) consider(1, EdgeKind::Order, "DMA channel " + std::to_string(A.channel));

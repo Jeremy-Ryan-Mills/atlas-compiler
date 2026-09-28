@@ -69,3 +69,56 @@ MachineModel readExperimentalMxu1Profile(const std::string& path, const MachineM
 MachineModel readExperimentalMxu0Profile(const std::string& path, const MachineModel& base) {
     return readProfile(path, 0, base);
 }
+
+MachineModel readExperimentalDmaProfile(const std::string& path, const MachineModel& base) {
+    std::ifstream stream(path);
+    auto fail = [&](const std::string& why) { return std::runtime_error("DMA profile " + path + ": " + why); };
+    if (!stream) throw fail("cannot read file");
+    std::map<std::string, std::string> fields;
+    auto trim = [](const std::string& text) {
+        size_t first = text.find_first_not_of(" \t\r\n");
+        return first == std::string::npos ? std::string{} : text.substr(first, text.find_last_not_of(" \t\r\n") - first + 1);
+    };
+    for (std::string line; std::getline(stream, line);) {
+        line = trim(line.substr(0, line.find('#')));
+        if (line.empty()) continue;
+        size_t eq = line.find('=');
+        if (eq == std::string::npos) throw fail("expected key=value");
+        std::string key = trim(line.substr(0, eq)), value = trim(line.substr(eq + 1));
+        if (!fields.emplace(key, value).second) throw fail("duplicate field " + key);
+    }
+    if (!stream.eof()) throw fail("read failed");
+    const std::map<std::string, std::string> supported = {
+        {"schema", "atlas-dma-profile-v1"}, {"config", "EE290SimConfig"},
+        {"operand_capture", "issue"}, {"config_update", "issue"},
+        {"vmem_word_address_low_bit", "3"}, {"vmem_line_address_bits", "16"},
+        {"transfer_size_bits", "13"}, {"vmem_line_bytes", "32"},
+        {"vmem_lines", "49152"}, {"channels", "8"}, {"command_slots", "8"},
+        {"completion", "explicit-wait"}, {"lsu_priority_over_dma", "1"},
+        // A supported subset, not a consequence of the 13-bit hardware field.
+        {"supported_max_transfer_bytes", "4096"},
+    };
+    for (const auto& [key, expected] : supported) {
+        auto found = fields.find(key);
+        if (found == fields.end()) throw fail("missing field " + key);
+        if (found->second != expected) throw fail("unsupported " + key + "=" + found->second);
+    }
+    for (const char* key : {"source_ir_sha256", "evidence_sha256"}) {
+        auto found = fields.find(key);
+        if (found == fields.end()) throw fail(std::string("missing field ") + key);
+        const std::string& hash = found->second;
+        if (hash.size() != 64 || !std::all_of(hash.begin(), hash.end(), [](char c) {
+            return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+        })) throw fail(std::string("invalid SHA-256 identity in ") + key);
+    }
+    if (fields.size() != supported.size() + 2) throw fail("unknown fields");
+    if (!base.sourceIrSha256.empty() && base.sourceIrSha256 != fields.at("source_ir_sha256"))
+        throw fail("cannot combine profiles from different hardware IR");
+    MachineModel model = base;
+    model.rtlDma = true;
+    // Like the MXU loaders, these identities name evidence without certifying it.
+    model.sourceIrSha256 = fields.at("source_ir_sha256");
+    model.name = (base.sourceIrSha256.empty() ? "EE290SimConfig/" : base.name + "; ") +
+        std::string("DMA evidence ") + fields.at("evidence_sha256");
+    return model;
+}

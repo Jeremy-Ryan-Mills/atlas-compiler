@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from rtlgraph_dma_compare import compare
+from rtlgraph_dma_compile import translate
 from rtlgraph_s0 import artifact
 
 
@@ -146,6 +147,91 @@ class DmaCompareTests(unittest.TestCase):
                     self.run_compare()
             finally:
                 path.write_bytes(original)
+
+    def native_fixture(self):
+        compiler, driver, hardware = [self.root / name for name in ('atlas-opt', 'adapter.py', 'hardware.mlir')]
+        for path in (compiler, driver, hardware):
+            path.write_text(path.name + '\n')
+        canonical = self.root / 'profile.json'
+        overrides = dict(completion='explicit-wait', operand_capture='issue')
+        canonical.write_text(json.dumps(dict(config='EE290SimConfig', compiler_overrides=overrides,
+                                             inputs=dict(hardware_ir=artifact(hardware)))))
+        profile = self.root / 'atlas-dma.profile'
+        profile.write_text('schema=atlas-dma-profile-v1\nconfig=EE290SimConfig\n'
+                           f'source_ir_sha256={artifact(hardware)["sha256"]}\n'
+                           f'evidence_sha256={artifact(canonical)["sha256"]}\n'
+                           + ''.join(f'{key}={value}\n' for key, value in overrides.items()))
+        native_input = self.root / 'native.compiler.S'
+        native_input.write_text(translate(SOURCE, to_compiler=True))
+        checked = self.root / 'final-check.compiler.S'
+        checked.write_text(translate(self.sources['output_overlap'].read_text(), to_compiler=True))
+        scheduled, log = self.root / 'scheduled.compiler.S', self.root / 'compile.log'
+        scheduled.write_text(checked.read_text())
+        log.write_text('Passed\n')
+        case = dict(self.record['cases']['output_overlap'], scheduled=artifact(scheduled), log=artifact(log),
+                    final_check_input=artifact(checked), final_check_log=artifact(log),
+                    scheduler_returncode=0, final_check_returncode=0,
+                    command=[str(compiler), str(native_input), '--passes', 'strip-artifacts,schedule',
+                             '--schedule-priority', 'critical', '--rtl-dma-profile', str(profile), '-o', str(scheduled)],
+                    final_check_command=[str(compiler), '--check', str(checked), '--rtl-dma-profile', str(profile)])
+        self.record.update(schema='atlas.rtlgraph.dma-native-schedule.v1', status='native_model_candidates_ready',
+                           native_input=artifact(native_input), instrumentation=dict(relocated=False, private_registers=[]),
+                           cases=dict(native_critical=case))
+        self.record['inputs'].pop('memory_baseline')
+        self.record['inputs'].update(compiler=artifact(compiler), profile=artifact(profile), driver=artifact(driver))
+        self.save_static()
+        return case
+
+    def compare_native(self):
+        return compare(self.runs['original'], self.runs['memory_baseline'],
+                       {'native_critical': self.runs['output_overlap']}, self.static)
+
+    def test_native_manifest_uses_independently_observed_baseline_and_rechecks_final_stream(self):
+        self.native_fixture()
+        with patch('rtlgraph_dma_compare.subprocess.run') as check:
+            check.return_value.returncode = 0
+            result = self.compare_native()
+        check.assert_called_once()
+        self.assertTrue(result['native_compiler_audit']['exact_final_native_checks_repeated'])
+        self.assertEqual(result['comparisons']['native_critical']['memory_baseline']['first_issue_to_dbg0_edges']['edges_saved'], 50)
+
+    def test_native_final_check_must_bind_replayed_stream_and_selected_model(self):
+        case = self.native_fixture()
+        case['final_check_command'][-1] = 'another.profile'
+        self.save_static()
+        with self.assertRaisesRegex(ValueError, 'check command differs'):
+            self.compare_native()
+        case['final_check_command'][-1] = self.record['inputs']['profile']['path']
+        path = Path(case['final_check_input']['path'])
+        path.write_text(path.read_text().replace('dma.wait.ch1', 'nop'))
+        case['final_check_input'] = artifact(path)
+        self.save_static()
+        with self.assertRaisesRegex(ValueError, 'did not cover'):
+            self.compare_native()
+
+    def test_native_profile_canonical_provenance_and_binary_are_required(self):
+        self.native_fixture()
+        canonical = self.root / 'profile.json'
+        canonical.write_text(canonical.read_text() + ' ')
+        with self.assertRaisesRegex(ValueError, 'profile evidence differs'):
+            self.compare_native()
+
+    def test_native_candidate_must_come_from_recorded_compiler_output(self):
+        case = self.native_fixture()
+        scheduled = Path(case['scheduled']['path'])
+        scheduled.write_text(scheduled.read_text().replace('dma.wait.ch1', 'nop'))
+        case['scheduled'] = artifact(scheduled)
+        self.save_static()
+        with self.assertRaisesRegex(ValueError, 'differs from native compiler output'):
+            self.compare_native()
+
+    def test_native_checker_failure_rejected_even_with_passing_record(self):
+        self.native_fixture()
+        with patch('rtlgraph_dma_compare.subprocess.run') as check:
+            check.return_value.returncode = 1
+            check.return_value.stdout, check.return_value.stderr = '', 'resource conflict'
+            with self.assertRaisesRegex(ValueError, 'no longer passes'):
+                self.compare_native()
 
 
 if __name__ == '__main__':

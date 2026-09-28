@@ -9,7 +9,9 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 import json
+import os
 from pathlib import Path
+import subprocess
 
 from rtlgraph_compare import require, runtime_options
 from rtlgraph_kernel import instruction_words, load_assembler
@@ -27,19 +29,81 @@ def transfer_signature(report):
                     command['dram'], command['size']) for command in report['commands'])
 
 
+def audit_native(static, selected):
+    """Bind native schedules and their exact final checks to source and model."""
+    from rtlgraph_dma_compile import extract_markers, insert_markers, translate
+    for name in ('source', 'assembler', 'compiler', 'profile', 'driver'):
+        verify_artifact(static['inputs'][name])
+    compiler = verify_artifact(static['inputs']['compiler'])
+    profile = verify_artifact(static['inputs']['profile'])
+    pairs = [line.split('=', 1) for line in profile.read_text().splitlines() if line]
+    require(all(len(pair) == 2 for pair in pairs) and len(dict(pairs)) == len(pairs), 'Malformed native DMA profile')
+    settings = dict(pairs)
+    canonical_path = profile.parent / 'profile.json'
+    canonical = json.loads(canonical_path.read_text())
+    require(settings.get('schema') == 'atlas-dma-profile-v1' and
+            settings.get('config') == canonical.get('config') == 'EE290SimConfig' and
+            settings.get('evidence_sha256') == artifact(canonical_path)['sha256'], 'Native DMA profile evidence differs')
+    require(settings == dict(schema='atlas-dma-profile-v1', config='EE290SimConfig',
+                             source_ir_sha256=canonical['inputs']['hardware_ir']['sha256'],
+                             evidence_sha256=artifact(canonical_path)['sha256'],
+                             **{key: str(value) for key, value in canonical['compiler_overrides'].items()}),
+            'Native DMA projection differs from canonical model')
+    for record in canonical['inputs'].values():
+        verify_artifact(record)
+    native_input = verify_artifact(static['native_input'])
+    source = verify_artifact(static['inputs']['source']).read_text()
+    markers = None
+    if static['instrumentation']['relocated']:
+        source, markers = extract_markers(source)
+        require(static['instrumentation']['private_registers'] == list(markers.private_registers),
+                'Native benchmark register proof differs')
+    require(native_input.read_text() == translate(source, to_compiler=True), 'Native compiler input differs from source')
+    for name in selected:
+        case = static['cases'][name]
+        for field in ('assembly', 'scheduled', 'log', 'final_check_input', 'final_check_log'):
+            verify_artifact(case[field])
+        require(case.get('scheduler_returncode') == case.get('final_check_returncode') == 0,
+                'Native compiler/check did not succeed')
+        command = case['command']
+        require(name in ('native_critical', 'native_input'), 'Unknown native schedule policy')
+        expected = [str(compiler), str(native_input), '--passes', 'strip-artifacts,schedule',
+                    '--schedule-priority', name.removeprefix('native_'), '--rtl-dma-profile', str(profile),
+                    '-o', case['scheduled']['path']]
+        require(command == expected, 'Native scheduler command differs from recorded inputs/model')
+        checked = verify_artifact(case['final_check_input'])
+        emitted = translate(verify_artifact(case['scheduled']).read_text(), to_compiler=False)
+        if markers:
+            emitted = insert_markers(emitted, markers)
+        require(translate(emitted, to_compiler=True) ==
+                translate(verify_artifact(case['assembly']).read_text(), to_compiler=True),
+                'Replayed candidate differs from native compiler output and marker policy')
+        require(checked.read_text() == translate(verify_artifact(case['assembly']).read_text(), to_compiler=True),
+                'Final native check did not cover the replayed assembly')
+        check_command = [str(compiler), '--check', str(checked), '--rtl-dma-profile', str(profile)]
+        require(case['final_check_command'] == check_command, 'Native check command differs from model/input')
+        check = subprocess.run(check_command, capture_output=True, text=True, env=os.environ.copy())
+        require(check.returncode == 0, 'Exact final native schedule no longer passes its model: ' + check.stdout + check.stderr)
+    return dict(profile=static['inputs']['profile'], canonical=artifact(canonical_path),
+                compiler=static['inputs']['compiler'], exact_final_native_checks_repeated=True)
+
+
 def compare(original, memory_baseline, candidates, candidate_manifest):
     static = json.loads(candidate_manifest.read_text())
-    require(static.get('schema') == 'atlas.rtlgraph.dma-schedule-experiment.v1'
-            and static.get('status') == 'candidates_ready', 'Invalid DMA candidate manifest')
+    native = static.get('schema') == 'atlas.rtlgraph.dma-native-schedule.v1'
+    require((native and static.get('status') == 'native_model_candidates_ready') or
+            (static.get('schema') == 'atlas.rtlgraph.dma-schedule-experiment.v1'
+             and static.get('status') == 'candidates_ready'), 'Invalid DMA candidate manifest')
     require(candidates and set(candidates) <= set(static['cases']), 'Unknown or missing DMA candidate')
     require(not set(candidates) & {'original', 'memory_baseline'}, 'Reserved candidate name')
+    native_audit = audit_native(static, candidates) if native else None
     results, baseline = {}, None
     for name, path in [('original', original), ('memory_baseline', memory_baseline), *candidates.items()]:
         run = json.loads(path.read_text())
         report = observation(path)  # Recheck command ownership, waits, row accesses, and goldens.
         completion = report['completion']
         expected = (static['inputs']['source'] if name == 'original' else
-                    static['inputs']['memory_baseline'] if name == 'memory_baseline' else
+                    (completion['assembly'] if native else static['inputs']['memory_baseline']) if name == 'memory_baseline' else
                     static['cases'][name]['assembly'])
         verify_artifact(expected)
         source = verify_artifact(completion['assembly'])
@@ -89,7 +153,7 @@ def compare(original, memory_baseline, candidates, candidate_manifest):
             comparisons[name][reference] = {'first_issue_to_dbg0_edges': {
                 'before': before, 'after': after, 'edges_saved': before - after,
                 'reduction_percent': 100 * (before - after) / before}}
-    return {'schema': 'atlas.rtlgraph.dma-comparison.v1', 'created_utc': timestamp(),
+    result = {'schema': 'atlas.rtlgraph.dma-comparison.v1', 'created_utc': timestamp(),
             'driver': artifact(Path(__file__).resolve()), 'candidate_manifest': artifact(candidate_manifest),
             'cases': results, 'comparisons': comparisons, 'fixed_host_control': baseline['control'],
             'identical_global_non_idle_words': True, 'identical_observed_dma_transfers': True,
@@ -101,6 +165,9 @@ def compare(original, memory_baseline, candidates, candidate_manifest):
                             'Instruction-word and transfer multisets do not alone prove semantic equivalence.',
                             'Local typed CIRCT facts and finite traces do not constitute universal scheduling-safety proof.',
                             'Cached simulator source-to-binary build linkage remains unverified.']}
+    if native_audit:
+        result['native_compiler_audit'] = native_audit
+    return result
 
 
 def main():

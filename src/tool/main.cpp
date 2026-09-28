@@ -19,6 +19,7 @@ static void usage() {
                  "  --check            only simulate the input and report problems\n"
                  "  --experimental-mxu1-profile FILE  use a partial RTL timing profile\n"
                  "  --experimental-mxu0-profile FILE  use a partial MXU0 resource profile\n"
+                 "  --rtl-dma-profile FILE  use partial RTL DMA capture/completion rules\n"
                  "  --schedule-priority MODE  critical (default) or input; ready-work ranking\n"
                  "  -q                 print nothing unless something is wrong\n";
 }
@@ -36,7 +37,7 @@ static void printProblems(const char* what, const SimResult& r) {
 }
 
 int main(int argc, char** argv) {
-    std::string input, output, vizPath, profilePath, mxu0ProfilePath;
+    std::string input, output, vizPath, profilePath, mxu0ProfilePath, dmaProfilePath;
     std::vector<std::string> passNames;
     PassContext ctx;
     bool checkOnly = false, quiet = false;
@@ -47,6 +48,7 @@ int main(int argc, char** argv) {
         else if (a == "--viz" && hasValue) vizPath = argv[++i];
         else if (a == "--experimental-mxu1-profile" && hasValue) profilePath = argv[++i];
         else if (a == "--experimental-mxu0-profile" && hasValue) mxu0ProfilePath = argv[++i];
+        else if (a == "--rtl-dma-profile" && hasValue) dmaProfilePath = argv[++i];
         else if (a == "--schedule-priority" && hasValue) {
             std::string mode = argv[++i];
             if (mode == "input") ctx.schedulePriority = SchedulePriority::Input;
@@ -79,8 +81,13 @@ int main(int argc, char** argv) {
     try {
         if (!profilePath.empty()) ctx.model = readExperimentalMxu1Profile(profilePath);
         if (!mxu0ProfilePath.empty()) ctx.model = readExperimentalMxu0Profile(mxu0ProfilePath, ctx.model);
-        if ((!profilePath.empty() || !mxu0ProfilePath.empty()) && !quiet)
+        if (!dmaProfilePath.empty()) ctx.model = readExperimentalDmaProfile(dmaProfilePath, ctx.model);
+        if (ctx.model.rtlDma && !ctx.robustDma)
+            throw std::runtime_error("--rtl-dma-profile requires robust DMA timing; estimated latency cannot establish completion");
+        if ((!profilePath.empty() || !mxu0ProfilePath.empty() || !dmaProfilePath.empty()) && !quiet)
             std::cerr << "  experimental partial machine profile: " << ctx.model.name << "\n";
+        if (ctx.model.rtlDma && !quiet)
+            std::cerr << "  DMA cycles below are cost estimates; correctness uses explicit waits and variable-wait reservations\n";
         SimOptions options;
         options.model = ctx.model;
         AsmProgram original = readAsmFile(input);
@@ -110,7 +117,7 @@ int main(int argc, char** argv) {
         if (!vizPath.empty() && !writeFile(vizPath, renderHtml(buildProgramView(input, original, code, before, after, ctx.model))))
             return 1;
 
-        bool bad = !after.violations.empty() || !after.stopReason.empty() || !afterSlow.violations.empty();
+        bool bad = !after.violations.empty() || !after.stopReason.empty() || !afterSlow.violations.empty() || !afterSlow.stopReason.empty();
         if (!quiet || bad) {
             for (const std::string& line : ctx.log) std::cerr << "  " << line << "\n";
             char buf[512];

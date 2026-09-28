@@ -21,26 +21,31 @@ struct MachineModel {
     int mxu1FirstWriteAge = 3;
     bool mxu1OverwriteAccReadHold = true;
     bool mxu0OverwriteAccReadHold = true;
+    bool rtlDma = false;  // issue-captured commands and explicit completion lifetimes
     std::string sourceIrSha256;
     std::string name = "npu_model/rtl-match";
 };
 
 MachineModel readExperimentalMxu1Profile(const std::string& path, const MachineModel& base = {});
 MachineModel readExperimentalMxu0Profile(const std::string& path, const MachineModel& base = {});
+MachineModel readExperimentalDmaProfile(const std::string& path, const MachineModel& base = {});
 
 // Storage an instruction reads or writes.
-enum class Res { XReg, EReg, MReg, Acc, Weight, Vmem, DmaBase };
+enum class Res { XReg, EReg, MReg, Acc, Weight, Vmem, DmaBase, Dram };
 
 // Elements [first, first + count) of one kind of storage. Element i is touched at
 // age + i * step. Elements are: register numbers for XReg/EReg, reg*32+row for MReg,
 // (mxu*2+index)*32+row for Acc/Weight, and 32-byte line numbers for Vmem.
+// Dram accesses currently use anywhere=true because DRAM base state is not tracked.
 struct Access {
     Res res;
     bool write;
     int first, count;
     int age, step;
     bool anywhere = false;      // address unknown: may touch any element
-    bool atCompletion = false;  // DMA: happens when the transfer finishes (time unknown)
+    // Default DMA model: access happens at completion. RTL DMA: memory is live
+    // from launch until an explicit wait establishes completion; age is not a bound.
+    bool atCompletion = false;
     int lastAge() const { return age + (count - 1) * step; }
 };
 
@@ -77,7 +82,7 @@ struct Footprint {
     bool writeDuringRead = false;            // vload may write registers others are still reading
     int vpuLive = 0;                          // VPU: occupies a VPU slot for ages 0 .. vpuLive-1
     int doneAge = 0;                          // last age at which the instruction uses any resource
-    int dmaCycles = 0;                        // DMA commands: expected transfer time (npu_model's estimate)
+    int dmaCycles = 0;                        // DMA cost estimate, never an RTL completion guarantee
     std::string error;                        // set when the operands are illegal
 };
 
@@ -95,7 +100,8 @@ struct Dependence {
 
 // Minimum issue distance between a and b, where a comes first in program order.
 // DMA accesses that happen at completion are handled by the graph builder instead.
-Dependence dependence(const Instr& a, const Footprint& fa, const Instr& b, const Footprint& fb);
+Dependence dependence(const Instr& a, const Footprint& fa, const Instr& b, const Footprint& fb,
+                      const MachineModel& model = {});
 
 // Frontend barriers: nothing may move across them.
 bool isBarrier(const Instr& in);

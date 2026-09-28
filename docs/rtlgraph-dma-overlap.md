@@ -2,6 +2,8 @@
 
 This experiment extends the [completed LSU/VPU overlap](rtlgraph-memory-overlap.md) across the original DMA boundaries in `perf_unary`. It preserves every encoded non-idle instruction, both input transfers, all three output transfers, every `DMA.WAIT`, and the existing full-output golden fixture. It uses `chipyard.EE290SimConfig` and the existing simulator selected by the baremetal Makefile/README. The original hardware and handwritten assembly remain unchanged.
 
+The subsequent [native DMA integration](rtlgraph-dma-native.md) replaces this experiment’s unary-specific schedule transformation with compiler dependency and resource rules. The measurements below retain their original adapter and evidence identities.
+
 ## Measured completion
 
 The [128-word controlled comparison](../build/rtlgraph-dma/comparison-128-1.json) and [83-word comparison](../build/rtlgraph-dma/comparison-83-1.json) each hold the host ELF outside its Atlas program array, runtime, fixture, seed, and first Atlas issue edge fixed. The smaller buffer changes host layout and launch conditions relative to the larger control; compare schedules within each column. Each replay passes all 1,536 output words and the independent DMA/LSU/VPU monitor.

@@ -21,7 +21,8 @@ struct InFlight {
 struct QueuedDma {
     Instr in;
     Footprint f;
-    long long issue, complete;  // complete: cycle the data moves and the registers are read
+    long long issue, complete;  // RTL mode uses complete only as a cost estimate
+    int slot = -1;             // RTL enqueue ring slot; reusable after explicit wait
 };
 
 std::string where(const Instr& in) { return "line " + std::to_string(in.line) + " (" + formatInstr(in) + ")"; }
@@ -75,6 +76,7 @@ SimResult simulate(const AsmProgram& prog, const SimOptions& opt) {
     std::array<long long, 8> channelComplete;
     channelComplete.fill(-1);
     long long lastDmaComplete = 0;
+    long long dmaLaunches = 0;
     ReservationTable table;
 
     auto violation = [&](const std::string& text) {
@@ -98,6 +100,9 @@ SimResult simulate(const AsmProgram& prog, const SimOptions& opt) {
     }
 
     long long t = 2;  // npu_model: word 0 is fetched in cycle 1 and issues in cycle 2
+    // Correctness uses the shortest possible dispatch spacing. A guessed DMA
+    // stall must not retire fixed work or establish a safe operand distance.
+    long long minimumT = t;
     long long lastIssue = 0, end = 0;
     int pc = 0, redirect = -1;
     bool inSlot = false;
@@ -116,29 +121,35 @@ SimResult simulate(const AsmProgram& prog, const SimOptions& opt) {
             r.stopReason = "illegal instruction";
             break;
         }
+        const long long hazardT = opt.model.rtlDma ? minimumT : t;
+        if (opt.model.rtlDma && op.opClass == OpClass::DmaWait) {
+            std::erase_if(dma, [&](const QueuedDma& d) { return d.in.op->channel == op.channel; });
+            channelComplete[op.channel] = -1;
+        }
 
         // Check live work before dispatch; same-tick completion is too late.
         if (in.release) {
             for (const InFlight& a : active)
-                if (a.issue + a.f.doneAge >= t)
+                if (a.issue + a.f.doneAge >= hazardT)
                     violation(where(in) + ": atlas.release publishes before " + where(a.in) +
                               " completes (cycle " + std::to_string(a.issue + a.f.doneAge) + ")");
             for (const QueuedDma& d : dma)
-                if (d.complete >= t)
+                if (opt.model.rtlDma || d.complete >= t)
                     violation(where(in) + ": atlas.release publishes before " + where(d.in) +
-                              " completes (cycle " + std::to_string(d.complete) + ")");
+                              (opt.model.rtlDma ? " has an explicit completion wait" :
+                               " completes (cycle " + std::to_string(d.complete) + ")"));
         }
 
         // Halt neither retires nor drains; only completions through this tick count.
         if (op.opClass == OpClass::Halt) {
             for (const InFlight& a : active)
-                if (a.issue + a.f.doneAge > t)
+                if (a.issue + a.f.doneAge > hazardT)
                     violation(where(in) + ": halts before " + where(a.in) + " completes (cycle " +
                               std::to_string(a.issue + a.f.doneAge) + ")");
             for (const QueuedDma& d : dma)
-                if (d.complete > t)
+                if (opt.model.rtlDma || d.complete > t)
                     violation(where(in) + ": halts before " + where(d.in) + " completes (cycle " +
-                              std::to_string(d.complete) + ")");
+                              (opt.model.rtlDma ? "unknown; missing explicit DMA.WAIT)" : std::to_string(d.complete) + ")"));
             r.cycles = t;
             return r;
         }
@@ -147,25 +158,31 @@ SimResult simulate(const AsmProgram& prog, const SimOptions& opt) {
         if (!f.error.empty()) violation(where(in) + ": " + f.error);
 
         // Forget work that can no longer constrain anything.
-        std::erase_if(active, [&](const InFlight& a) { return t - a.issue > a.f.doneAge + 1; });
-        std::erase_if(dma, [&](const QueuedDma& d) { return d.complete < t; });
-        if (r.issued % 256 == 0) table.forgetBefore((int)std::max(0LL, t - 2));
+        std::erase_if(active, [&](const InFlight& a) { return hazardT - a.issue > a.f.doneAge + 1; });
+        if (!opt.model.rtlDma) std::erase_if(dma, [&](const QueuedDma& d) { return d.complete < t; });
+        if (r.issued % 256 == 0) table.forgetBefore((int)std::max(0LL, hazardT - 2));
 
         for (const InFlight& a : active) {
-            Dependence d = dependence(a.in, a.f, in, f);
-            if (d.distance > 0 && t - a.issue < d.distance)
-                violation(where(in) + " issued " + std::to_string(t - a.issue) + " cycles after " + where(a.in) +
+            Dependence d = dependence(a.in, a.f, in, f, opt.model);
+            if (d.distance > 0 && hazardT - a.issue < d.distance)
+                violation(where(in) + " issued " + std::to_string(hazardT - a.issue) + " cycles after " + where(a.in) +
                           ", needs " + std::to_string(d.distance) + " (" + d.reason + ")");
         }
 
-        // Effects of queued DMA transfers happen at their completion cycle.
+        // RTL memory lifetimes extend from launch through the explicit wait.
+        // The inherited model instead places accesses at estimated completion.
         for (const QueuedDma& d : dma) {
             for (const Access& x : d.f.accesses) {
                 if (!x.atCompletion || x.res == Res::DmaBase) continue;
                 for (const Access& y : f.accesses) {
-                    if (y.atCompletion || (!x.write && !y.write)) continue;
+                    if ((!opt.model.rtlDma && y.atCompletion) || (!x.write && !y.write)) continue;
                     long long first, last;
-                    if (!overlapCycles(y, t, x, first, last)) continue;
+                    if (!overlapCycles(y, hazardT, x, first, last)) continue;
+                    if (opt.model.rtlDma) {
+                        violation(where(in) + " conflicts with memory held by " + where(d.in) +
+                                  " until its explicit DMA.WAIT");
+                        continue;
+                    }
                     // Scalar writes happen before the DMA reads in the same cycle; LSU accesses after.
                     bool early = x.res == Res::XReg ? first <= d.complete : first < d.complete;
                     if (early)
@@ -175,17 +192,26 @@ SimResult simulate(const AsmProgram& prog, const SimOptions& opt) {
             }
         }
 
-        bool isDmaCommand = op.engine == Engine::Dma && op.opClass != OpClass::DmaWait;
+        bool isDmaCommand = op.engine == Engine::Dma && op.opClass != OpClass::DmaWait &&
+                            (!opt.model.rtlDma || op.opClass != OpClass::DmaConfig);
         long long complete = 0;
         if (isDmaCommand) {
-            if (channelComplete[op.channel] >= 0 && t < channelComplete[op.channel] + 2)
+            if (channelComplete[op.channel] >= 0 &&
+                (opt.model.rtlDma || t < channelComplete[op.channel] + 2))
                 violation(where(in) + ": DMA channel " + std::to_string(op.channel) + " is still busy");
+            const int slot = opt.model.rtlDma ? (int)(dmaLaunches++ % 8) : -1;
+            if (opt.model.rtlDma)
+                for (const QueuedDma& d : dma)
+                    if (d.slot == slot)
+                        violation(where(in) + ": DMA ring slot " + std::to_string(slot) +
+                                  " is still occupied until " + where(d.in) + " has an explicit DMA.WAIT");
             long long bytes = 0;
             if (op.opClass != OpClass::DmaConfig) bytes = regs[in.rs2] ? *regs[in.rs2] : 0;
             long long latency = (long long)std::ceil(dmaTransferCycles(bytes) * opt.dmaLatencyScale);
             complete = std::max(t + latency - 1, lastDmaComplete + latency);  // one transfer at a time, in order
             if (const Access* range = dmaVmem(f)) {
                 for (const QueuedDma& d : dma) {
+                    if (opt.model.rtlDma) break;  // all RTL memory aliases checked above
                     const Access* other = dmaVmem(d.f);
                     long long first, last;
                     if (other && overlapCycles(*range, t, *other, first, last))
@@ -196,26 +222,28 @@ SimResult simulate(const AsmProgram& prog, const SimOptions& opt) {
                         long long first, last;
                         if (y.atCompletion || (!y.write && !range->write) || !overlapCycles(y, a.issue, *range, first, last))
                             continue;
-                        if (last >= complete)
+                        if (last >= (opt.model.rtlDma ? hazardT : complete))
                             violation(where(in) + " moves data that " + where(a.in) + " is still accessing");
                     }
             }
-            dma.push_back({in, f, t, complete});
+            dma.push_back({in, f, t, complete, slot});
             lastDmaComplete = complete;
             channelComplete[op.channel] = complete;
             end = std::max(end, complete);
         }
 
-        std::string conflict = table.conflict(in, f, (int)t);
+        std::string conflict = table.conflict(in, f, (int)hazardT);
         if (!conflict.empty()) violation(where(in) + ": " + conflict);
-        table.reserve(in, f, (int)t);
-        active.push_back({in, f, t});
+        table.reserve(in, f, (int)hazardT);
+        if (opt.model.rtlDma && op.opClass == OpClass::DmaWait) table.extendForWait((int)hazardT);
+        active.push_back({in, f, hazardT});
         end = std::max(end, t + f.doneAge);
 
         r.issued++;
         if (op.opClass == OpClass::Delay) r.delays++;
         lastIssue = t;
         long long nextT = t + (op.opClass == OpClass::Delay ? 1 + (in.imm & 0xFFF) : 1);
+        long long nextMinimumT = minimumT + (op.opClass == OpClass::Delay ? 1 + (in.imm & 0xFFF) : 1);
 
         int nextPc = pc + 1;
         if (inSlot) {
@@ -245,12 +273,16 @@ SimResult simulate(const AsmProgram& prog, const SimOptions& opt) {
         // Halt bypasses delay stalls, including those in branch slots.
         if (op.opClass == OpClass::Delay && nextPc >= 0 && nextPc < n &&
             prog.instrs[nextPc].op->opClass == OpClass::Halt)
-            nextT = t + 1;
+            nextT = t + 1, nextMinimumT = minimumT + 1;
         // Falloff still drains the delay counter.
         if (op.opClass == OpClass::Delay) end = std::max(end, t + (in.imm & 0xFFF));
         pc = nextPc;
         t = nextT;
+        minimumT = nextMinimumT;
     }
+    if (opt.model.rtlDma && (pc < 0 || pc >= n))
+        for (const QueuedDma& d : dma)
+            violation(where(d.in) + ": program ends without explicit DMA.WAIT for this transfer");
     r.cycles = std::max(lastIssue, end);
     return r;
 }

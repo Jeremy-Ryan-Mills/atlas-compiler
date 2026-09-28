@@ -1,7 +1,9 @@
 #include "core/depgraph.h"
 
 #include <algorithm>
+#include <array>
 #include <map>
+#include <stdexcept>
 
 namespace {
 
@@ -41,6 +43,69 @@ bool conflictsAtCompletion(const Footprint& dma, const Footprint& f, EdgeKind& k
     return false;
 }
 
+bool isDmaTransfer(const Instr& in) {
+    return in.op->opClass == OpClass::DmaLoad || in.op->opClass == OpClass::DmaStore;
+}
+
+std::runtime_error dmaError(const Instr& in, const std::string& reason) {
+    return std::runtime_error("line " + std::to_string(in.line) + " (" + formatInstr(in) +
+                              "): RTL DMA " + reason);
+}
+
+// A transfer's memory lifetime ends at an explicit matching wait, never at the
+// estimated dmaCycles. Issue operands have already been captured by hardware.
+// The native RTL mode currently admits only transfers completed within a block;
+// CFG admission separately requires idle DMA at every block boundary.
+void addRtlDmaEdges(DepGraph& g, EdgeSet& edges) {
+    const int n = (int)g.nodes.size();
+    std::array<int, 8> pending;
+    pending.fill(-1);
+    std::vector<int> waits(n, -1), launches;
+    for (int i = 0; i < n; i++) {
+        const Instr& in = g.nodes[i];
+        const int ch = in.op->channel;
+        if (isDmaTransfer(in)) {
+            if (pending[ch] >= 0)
+                throw dmaError(in, "channel " + std::to_string(ch) +
+                                   " reused without an intervening explicit DMA.WAIT");
+            pending[ch] = i;
+            launches.push_back(i);
+        } else if (in.op->opClass == OpClass::DmaWait && pending[ch] >= 0) {
+            waits[pending[ch]] = i;
+            edges.add(pending[ch], i, 1, EdgeKind::Order,
+                      "RTL DMA transfer must launch before its explicit wait");
+            pending[ch] = -1;
+        }
+    }
+    for (int d : pending)
+        if (d >= 0)
+            throw dmaError(g.nodes[d], "transfer requires an explicit matching DMA.WAIT in the same block");
+
+    // Enqueue has no ready signal. Launch order is preserved, so command i uses
+    // the same ring slot as command i-8. A count of outstanding commands alone
+    // cannot establish that this particular slot has retired.
+    for (size_t i = 8; i < launches.size(); i++) {
+        const int previous = launches[i - 8], current = launches[i];
+        if (waits[previous] >= current)
+            throw dmaError(g.nodes[current], "ring slot reused before the earlier transfer's explicit DMA.WAIT");
+        edges.add(waits[previous], current, 1, EdgeKind::Order,
+                  "RTL DMA ring slot must retire before its eighth subsequent launch");
+    }
+
+    for (int d : launches) {
+        const int wait = waits[d];
+        for (int k = d + 1; k < n; k++) {
+            EdgeKind kind;
+            if (k == wait || !conflictsAtCompletion(g.footprints[d], g.footprints[k], kind)) continue;
+            if (k < wait)
+                throw dmaError(g.nodes[k], "memory access conflicts with pending " + g.nodes[d].op->name +
+                                          " before its explicit DMA.WAIT");
+            edges.add(wait, k, 1, kind, std::string(edgeKindName(kind)) +
+                      " with RTL DMA memory lifetime (released by explicit wait)");
+        }
+    }
+}
+
 }  // namespace
 
 uint32_t dmaOperandRegisters(const std::vector<Instr>& instrs) {
@@ -66,14 +131,16 @@ DepGraph buildGraph(const std::vector<Instr>& instrs, const RegValues& entry, ui
     EdgeSet edges{g, {}};
     for (int b = 0; b < n; b++)
         for (int a = 0; a < b; a++) {
-            Dependence d = dependence(g.nodes[a], g.footprints[a], g.nodes[b], g.footprints[b]);
+            Dependence d = dependence(g.nodes[a], g.footprints[a], g.nodes[b], g.footprints[b], model);
             if (d.distance > 0) edges.add(a, b, d.distance, d.kind, d.reason);
         }
 
-    // A DMA reads its registers and moves data when it completes, which is only known
+    if (model.rtlDma) addRtlDmaEdges(g, edges);
+
+    // The legacy model reads DMA registers and moves data when it completes, which is only known
     // to have happened once the matching dma.wait issues. Later conflicting accesses
     // therefore wait for that dma.wait.
-    for (int d = 0; d < n; d++) {
+    for (int d = 0; !model.rtlDma && d < n; d++) {
         const OpInfo& op = *g.nodes[d].op;
         if (op.engine != Engine::Dma || op.opClass == OpClass::DmaWait) continue;
         int wait = -1;
@@ -96,13 +163,15 @@ DepGraph buildGraph(const std::vector<Instr>& instrs, const RegValues& entry, ui
         if (op.opClass != OpClass::DmaWait) continue;
         bool local = false;
         for (int d = 0; d < w; d++)
-            if (g.nodes[d].op->engine == Engine::Dma && g.nodes[d].op->channel == op.channel) local = true;
+            if ((model.rtlDma ? isDmaTransfer(g.nodes[d]) : g.nodes[d].op->engine == Engine::Dma) &&
+                g.nodes[d].op->channel == op.channel) local = true;
         if (local) continue;
         for (int k = w + 1; k < n; k++) {
-            bool guarded = g.nodes[k].op->engine == Engine::Dma && g.nodes[k].op->opClass != OpClass::DmaWait;
+            bool guarded = model.rtlDma ? isDmaTransfer(g.nodes[k]) :
+                           g.nodes[k].op->engine == Engine::Dma && g.nodes[k].op->opClass != OpClass::DmaWait;
             for (const Access& a : g.footprints[k].accesses) {
                 if (a.res == Res::Vmem) guarded = true;
-                if (a.res == Res::XReg && a.write && (dmaRegs >> a.first & 1)) guarded = true;
+                if (!model.rtlDma && a.res == Res::XReg && a.write && (dmaRegs >> a.first & 1)) guarded = true;
             }
             if (guarded) edges.add(w, k, 1, EdgeKind::Order, op.name + " guards a transfer started in an earlier block");
         }

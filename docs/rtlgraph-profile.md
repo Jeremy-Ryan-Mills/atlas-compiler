@@ -80,3 +80,10 @@ This is finite validation for one configuration and three original kernels, with
 The [MXU0 profile](rtlgraph-mxu0.md) adds one separately derived override via `--experimental-mxu0-profile FILE`. It can be combined with `--experimental-mxu1-profile FILE`; the loader preserves each engine's fields and rejects different hardware-IR identities. The MXU0 schema accepts no first-write age, so it cannot accidentally copy MXU1 pipeline timing into the systolic array. Default behavior remains the built-in model, and accumulating matmuls retain their read reservations in both profiles.
 
 The [corpus adapter](../scripts/rtlgraph_schedule.py) prepares both MXUs and selected VPU instructions, validates assembler roundtrips and fixed operation/operand multisets, and compares matching priority policies. [VPU extraction](rtlgraph-vpu.md) currently corroborates existing issue/resource rules without adding a latency override. The richer canonical machine description and optional Merlin adapter remain future work.
+
+## Composing the DMA projection
+
+The [native DMA profile](rtlgraph-dma-native.md) extends the same model through
+`--rtl-dma-profile FILE`. It composes with MXU profiles from the same hardware IR,
+replacing DMA operand-capture, configuration, address, and completion semantics.
+All remaining local timing rules retain their selected MXU or inherited values.

@@ -13,6 +13,123 @@ static void check(bool value, const char* why) {
     if (!value) throw std::runtime_error(why);
 }
 
+static void checkDmaProfile(const std::filesystem::path& path, const MachineModel& mxus) {
+    const std::string text =
+        "schema=atlas-dma-profile-v1\nconfig=EE290SimConfig\nsource_ir_sha256=" + std::string(64, 'a') +
+        "\nevidence_sha256=" + std::string(64, 'e') + "\noperand_capture=issue\nconfig_update=issue\n"
+        "vmem_word_address_low_bit=3\nvmem_line_address_bits=16\ntransfer_size_bits=13\n"
+        "vmem_line_bytes=32\nvmem_lines=49152\nchannels=8\ncommand_slots=8\ncompletion=explicit-wait\n"
+        "lsu_priority_over_dma=1\nsupported_max_transfer_bytes=4096\n";
+    auto load = [&](const std::string& input, const MachineModel& prior = MachineModel{}) {
+        { std::ofstream f(path); f << input; }
+        return readExperimentalDmaProfile(path.string(), prior);
+    };
+    auto model = load(text, mxus);
+    check(model.rtlDma && model.mxu1FirstWriteAge == mxus.mxu1FirstWriteAge &&
+          model.mxu0OverwriteAccReadHold == mxus.mxu0OverwriteAccReadHold,
+          "DMA profile discarded prior MXU settings");
+    check(!MachineModel{}.rtlDma, "default model enabled RTL DMA");
+    // Every field is mandatory and its accepted values are deliberately narrow.
+    for (size_t begin = 0; begin < text.size();) {
+        size_t end = text.find('\n', begin) + 1;
+        const auto line = text.substr(begin, end - begin);
+        const auto equal = line.find('=');
+        for (const auto& malformed : {
+                 text.substr(0, begin) + text.substr(end), text + line,
+                 text.substr(0, begin) + line.substr(0, equal + 1) + "unsupported\n" + text.substr(end)}) {
+            bool rejected = false;
+            try { load(malformed); } catch (const std::runtime_error&) { rejected = true; }
+            check(rejected, "missing, duplicated, or unsupported DMA field accepted");
+        }
+        begin = end;
+    }
+    bool rejected = false;
+    try { load(text + "unknown=0\n"); } catch (const std::runtime_error&) { rejected = true; }
+    check(rejected, "unknown DMA field accepted");
+    auto otherIr = mxus;
+    otherIr.sourceIrSha256 = std::string(64, 'f');
+    rejected = false;
+    try { load(text, otherIr); } catch (const std::runtime_error&) { rejected = true; }
+    check(rejected, "DMA profile accepted another hardware IR");
+
+    auto commands = parseAsm("dma.config.ch0 x5\ndma.load.ch0 x6, x1, x12\n"
+                             "dma.store.ch1 x1, x6, x12\naddi x1, x0, 32\ndma.wait.ch0\n").instrs;
+    auto regs = zeroRegs();
+    regs[1] = 0x90000000;
+    regs[6] = 0x20000400;
+    regs[12] = 2048;
+    auto config = footprintOf(commands[0], regs, model);
+    check(config.error.empty() && config.dmaCycles == 0 && config.doneAge == 0,
+          "RTL DMA.CONFIG was queued");
+    for (const auto& access : config.accesses)
+        check(!access.atCompletion, "RTL DMA.CONFIG did not capture at issue");
+    check(footprintOf(commands[0], regs).dmaCycles == dmaTransferCycles(0),
+          "default DMA.CONFIG behavior changed");
+    auto loadFootprint = footprintOf(commands[1], regs, model);
+    auto storeFootprint = footprintOf(commands[2], regs, model);
+    check(loadFootprint.error.empty() && storeFootprint.error.empty(), "legal RTL DMA rejected");
+    for (const auto& footprint : {loadFootprint, storeFootprint}) {
+        int capture = 0, vmem = 0, dram = 0;
+        for (const auto& access : footprint.accesses) {
+            if (access.res == Res::XReg || access.res == Res::DmaBase) {
+                check(!access.atCompletion && access.age == 0 && !access.write,
+                      "DMA operand not captured at issue");
+                ++capture;
+            } else if (access.res == Res::Vmem) {
+                check(access.first == 128 && access.count == 64 && access.atCompletion && !access.anywhere,
+                      "DMA word address/range was not converted to local VMEM lines");
+                ++vmem;
+            } else if (access.res == Res::Dram) {
+                check(access.atCompletion && access.anywhere, "DRAM alias lifetime missing");
+                ++dram;
+            }
+        }
+        check(capture == 4 && vmem == 1 && dram == 1, "DMA footprint lost captured fields or memory");
+    }
+    for (const auto& access : loadFootprint.accesses) {
+        if (access.res == Res::Vmem) check(access.write, "DMA load did not write VMEM");
+        if (access.res == Res::Dram) check(!access.write, "DMA load did not read DRAM");
+    }
+    for (const auto& access : storeFootprint.accesses) {
+        if (access.res == Res::Vmem) check(!access.write, "DMA store did not read VMEM");
+        if (access.res == Res::Dram) check(access.write, "DMA store did not write DRAM");
+    }
+    check(!footprintOf(commands[1], regs).error.empty(), "default byte-address interpretation changed");
+    auto overwrite = footprintOf(commands[3], regs, model);
+    check(dependence(commands[1], loadFootprint, commands[3], overwrite, model).distance == 1,
+          "launch-captured scalar cannot be overwritten after launch");
+    auto wait = footprintOf(commands[4], regs, model);
+    check(dependence(commands[0], config, commands[4], wait, model).distance == 0,
+          "scalar DMA.CONFIG was treated as a queued channel command");
+    check(dependence(commands[0], config, commands[1], loadFootprint, model).distance == 1,
+          "DMA base configuration dependence missing");
+
+    for (uint32_t pointer : {0x20000001u, 0x20060000u, 0x2005fff8u}) {
+        auto bad = regs;
+        bad[6] = pointer;
+        check(!footprintOf(commands[1], bad, model).error.empty(), "unaligned or out-of-range DMA VMEM accepted");
+    }
+    for (uint32_t size : {0u, 1u, 31u, 33u, 4097u, 8192u, 0xffffffffu}) {
+        auto bad = regs;
+        bad[12] = size;
+        check(!footprintOf(commands[1], bad, model).error.empty(), "unsupported DMA size accepted");
+    }
+    auto bad = regs;
+    bad[1] = 0x90000001;
+    check(!footprintOf(commands[1], bad, model).error.empty(), "unaligned DMA DRAM pointer accepted");
+    auto end = regs;
+    end[6] = 0x2005fff8;
+    end[12] = 32;
+    check(footprintOf(commands[1], end, model).error.empty(), "last physical DMA VMEM line rejected");
+    auto largest = regs;
+    largest[12] = 4096;
+    check(footprintOf(commands[1], largest, model).error.empty(), "supported maximum DMA size rejected");
+    auto unknown = footprintOf(commands[1], unknownRegs(), model);
+    for (const auto& access : unknown.accesses)
+        if (access.res == Res::Vmem)
+            check(access.anywhere && access.atCompletion, "unknown DMA address was not conservative");
+}
+
 int main() {
     auto path = std::filesystem::temp_directory_path() /
         ("atlas-profile-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -108,6 +225,7 @@ int main() {
         options.model = combined;
         check(simulate(flatten(code), options).violations.empty(), "MXU0 profile schedule invalid");
         check(!simulate(flatten(code)).violations.empty(), "MXU0 profile was not used by scheduler");
+        checkDmaProfile(path, combined);
         std::filesystem::remove(path);
         std::cout << "PASS: partial profile parsing, default isolation, resource use, graph, scheduler and simulator\n";
     } catch (const std::exception& error) {

@@ -44,3 +44,11 @@ add_test(NAME machine-profile-tests COMMAND machine-profile-tests)
 add_executable(schedule-priority-tests tests/schedule_priority_tests.cpp)
 target_link_libraries(schedule-priority-tests atlas)
 add_test(NAME schedule-priority-tests COMMAND schedule-priority-tests)
+
+add_executable(rtl-dma-tests tests/rtl_dma_tests.cpp)
+target_link_libraries(rtl-dma-tests atlas)
+add_test(NAME rtl-dma-tests COMMAND rtl-dma-tests)
+
+add_executable(rtl-dma-simulator-tests tests/rtl_dma_simulator_tests.cpp)
+target_link_libraries(rtl-dma-simulator-tests atlas)
+add_test(NAME rtl-dma-simulator-tests COMMAND rtl-dma-simulator-tests)

@@ -22,8 +22,11 @@ struct DepGraph {
     std::vector<std::vector<int>> in, out;  // edge indices entering / leaving each node
 };
 
-// `dmaRegs` is a bit mask of the x registers that DMA commands anywhere in the
-// program read (they read them when the transfer completes).
+// `dmaRegs` is a bit mask of x registers read by DMA commands anywhere in the
+// program. The legacy model guards their completion-time reads across blocks;
+// the RTL model captures them at launch and does not extend those reads.
+// RTL DMA scheduling requires each transfer's explicit matching wait within its
+// block, and rejects conflicting memory uses or ring/channel reuse before it.
 DepGraph buildGraph(const std::vector<Instr>& instrs, const RegValues& entry, uint32_t dmaRegs = 0xFFFFFFFE,
                     const MachineModel& model = {});
 

@@ -6,8 +6,13 @@
 namespace {
 
 // Only a matching wait clears a channel's may-pending bit.
-unsigned dmaAfter(const Instr& in, unsigned pending) {
-    if (in.op->engine != Engine::Dma) return pending;
+bool dmaCommand(const Instr& in, const MachineModel& model) {
+    return in.op->engine == Engine::Dma && in.op->opClass != OpClass::DmaWait &&
+           !(model.rtlDma && in.op->opClass == OpClass::DmaConfig);
+}
+
+unsigned dmaAfter(const Instr& in, unsigned pending, const MachineModel& model) {
+    if (in.op->engine != Engine::Dma || (model.rtlDma && in.op->opClass == OpClass::DmaConfig)) return pending;
     unsigned channel = 1u << in.op->channel;
     return in.op->opClass == OpClass::DmaWait ? pending & ~channel : pending | channel;
 }
@@ -19,7 +24,7 @@ void visitInstructions(const Block& block, Fn visit) {
     if (block.slot) visit(*block.slot);
 }
 
-void validateReleaseDma(const Code& code) {
+void validateReleaseDma(const Code& code, const MachineModel& model) {
     for (const Block& block : code.blocks) {
         visitInstructions(block, [](const Instr& in) {
             if (in.release && in.op->opClass != OpClass::Csr)
@@ -44,7 +49,7 @@ void validateReleaseDma(const Code& code) {
         if (block.unknownSuccs)
             throw std::runtime_error("atlas.release requires known control-flow successors");
         unsigned pending = entry[index];
-        visitInstructions(block, [&](const Instr& in) { pending = dmaAfter(in, pending); });
+        visitInstructions(block, [&](const Instr& in) { pending = dmaAfter(in, pending, model); });
         for (int successor : block.succs) {
             if (successor < 0 || successor >= (int)code.blocks.size())
                 throw std::runtime_error("atlas.release encountered an invalid control-flow successor");
@@ -63,7 +68,7 @@ void validateReleaseDma(const Code& code) {
         unsigned pending = entry[index];
         visitInstructions(code.blocks[index], [&](const Instr& in) {
             // A channel flag cannot count overlapping commands; require idle reuse.
-            if (in.op->engine == Engine::Dma && in.op->opClass != OpClass::DmaWait &&
+            if (dmaCommand(in, model) &&
                 (pending & (1u << in.op->channel))) {
                 std::string channel = "ch" + std::to_string(in.op->channel);
                 throw std::runtime_error("line " + std::to_string(in.line) +
@@ -82,8 +87,34 @@ void validateReleaseDma(const Code& code) {
                                          ": atlas.release may publish with pending DMA on " + channels +
                                          "; add matching dma.wait instructions on every reaching path");
             }
-            pending = dmaAfter(in, pending);
+            pending = dmaAfter(in, pending, model);
         });
+    }
+}
+
+// The first native RTL projection requires every transfer's completion guard
+// inside its launch block. This admits loops with idle DMA at their boundaries
+// without pretending the block-local scheduler tracks pending work through CFG joins.
+void validateRtlDma(const Code& code, const PassContext& ctx) {
+    if (!ctx.model.rtlDma) return;
+    if (!ctx.robustDma)
+        throw std::runtime_error("RTL DMA scheduling requires robust variable-wait reservations");
+    for (const Block& block : code.blocks) {
+        if (block.slot && block.slot->op->engine == Engine::Dma)
+            throw std::runtime_error("RTL DMA commands in branch delay slots are not supported");
+        unsigned pending = 0;
+        visitInstructions(block, [&](const Instr& in) {
+            if (dmaCommand(in, ctx.model) && (pending & (1u << in.op->channel)))
+                throw std::runtime_error("line " + std::to_string(in.line) +
+                                         ": RTL DMA channel reused before an explicit matching wait");
+            if (in.release && pending)
+                throw std::runtime_error("line " + std::to_string(in.line) +
+                                         ": atlas.release has pending RTL DMA; an explicit wait is required");
+            pending = dmaAfter(in, pending, ctx.model);
+        });
+        if (pending)
+            throw std::runtime_error("RTL DMA requires a matching explicit wait in the same block; "
+                                     "pending DMA across block boundaries is not supported");
     }
 }
 
@@ -141,18 +172,20 @@ void runPasses(Code& code, const std::vector<std::string>& names, PassContext& c
         for (const Pass& p : allPasses()) known |= name == p.name;
         if (!known) throw std::runtime_error("unknown pass '" + name + "'");
     }
+    validateRtlDma(code, ctx);
     if (hasRelease) {
         if (!schedules)
             throw std::runtime_error("line " + std::to_string(firstReleaseLine) +
                                      ": atlas.release requires the schedule pass");
-        validateReleaseDma(code);
+        validateReleaseDma(code, ctx.model);
     }
     for (const Pass& p : allPasses()) {
         bool selected = names.empty();
         for (const std::string& name : names) selected |= name == p.name;
         if (selected) {
             p.run(code, ctx);
-            if (hasRelease) validateReleaseDma(code);
+            validateRtlDma(code, ctx);
+            if (hasRelease) validateReleaseDma(code, ctx.model);
         }
     }
 }
