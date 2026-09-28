@@ -1,68 +1,71 @@
 # Functional / Executable Assembly Contract
 
 ```
-model ──model mapping──▶ functional .S ──atlas-opt──▶ executable .S ──▶ perf model / RTL
+model ──model mapping──▶ kernel.fs.S ──atlas-opt──▶ kernel.es.S ──▶ perf model / RTL
+                          functional                 executable
 ```
 
 - **Model mapping** decides *what* the NPU computes and *where data lives*: fusion,
   tiling, loops, layout, buffer allocation, DMA channels.
-- **atlas-opt** decides *when* each instruction issues, so the program runs correctly
-  and as fast as possible (`atlas-opt in.S -o out.S`).
-- The functional assembly (FS) is the only interface. It carries no timing that
-  atlas-opt relies on.
+- **atlas-opt** decides *when* each instruction issues: it inserts every `dma.wait`,
+  fills every branch delay slot, and adds the minimum `delay`s.
+- The functional assembly (FS) is the only interface. It contains no timing.
 
 ## 1. Formats
 
-| | Functional (input) | Executable (output) |
+| | Functional (`.fs.S`) | Executable (`.es.S`) |
 |---|---|---|
-| Written by | model mapping (today's hand-scheduled kernels are also accepted) | atlas-opt |
-| Semantics | one instruction at a time, except the branch delay slot (below) | npu_model `rtl-match` timing |
-| `delay` | ignored and removed, except `delay N # keep` | inserted: the minimum needed |
-| Branches and jumps | the next instruction is the delay slot: it runs on both paths | same; empty slots are filled with independent scalar work |
-| `dma.wait` | optional (§2, rule 5) | present wherever the program needs a transfer finished |
+| Written by | model mapping | atlas-opt |
+| Semantics | one instruction at a time; a DMA is complete when it issues | npu_model `rtl-match` timing |
+| `delay` | none | the minimum needed |
+| Branches and jumps | followed by a `nop`, the empty delay slot | slot filled with independent scalar work, or left `nop` |
+| `dma.wait` | none | wherever the program needs a transfer finished |
 | Hardware rules | none | every RTL assertion holds (MREG reservations and ports, VPU slots, MXU ports, LSU paths, VMEM banks), for any DMA latency by default |
 
-Both use today's instruction set and syntax (`li`, `nop` and labels allowed).
+Both use today's instruction set and syntax (`li`, `nop` and labels allowed). The
+extensions are a naming convention; atlas-opt takes any path
+(`atlas-opt kernel.fs.S -o kernel.es.S`).
 
 **Equivalence:** the executable program leaves the same DRAM contents at exit as the
 functional one. Only DRAM is live at exit; registers, VMEM, weight slots and
-accumulators may differ. (The tests are stricter today; see §4, item 6.)
+accumulators may differ. (The tests are stricter today; see §4, item 5.)
 
 ## 2. Rules for functional assembly
 
-1. Runs correctly one instruction at a time (with the delay slot) and `dma.store`s
-   every output to DRAM.
-2. Correct without its `delay`s: atlas-opt removes them (keeping `delay N # keep`) and
-   computes its own timing.
-3. No dependence on instruction addresses: no `auipc`, `jalr`, or `jal` with a
-   nonzero link register, and cycle-counter CSRs only for diagnostics. A delay slot
-   may not hold a halt or a `delay N # keep`.
-4. Obeys the ISA legality rules: even BF16 register pairs, no pair at m63, `vload` /
+1. Runs correctly one instruction at a time and `dma.store`s every output to DRAM.
+2. No `delay` and no `dma.wait`.
+3. Every branch and jump is followed by a `nop`. atlas-opt owns the delay slot and
+   decides what runs in it; model mapping never puts work there.
+4. No dependence on instruction addresses: no `auipc`, `jalr`, or `jal` with a
+   nonzero link register, and cycle-counter CSRs only for diagnostics.
+5. Obeys the ISA legality rules: even BF16 register pairs, no pair at m63, `vload` /
    `vstore` 1 KiB aligned within one 256 KiB VMEM bank, and no instruction that
    conflicts with itself (e.g. `vadd.bf16 m4, m0, m32`: m0 and m32 share a physical
    MREG bank).
-5. **DMA:** `dma.wait` is optional; a DMA may be treated as complete once it issues.
-   atlas-opt inserts `dma.wait.chN`, on every path including loop back-edges, before
-   any instruction that:
+6. **DMA:** write `dma.load` / `dma.store` / `dma.config` on any channel and use the
+   data, registers and channel right after, as if the transfer had finished. atlas-opt
+   inserts `dma.wait.chN`, on every path including loop back-edges, before any
+   instruction that:
    - touches the transfer's VMEM range (an unknown address counts as touching it);
    - writes a register the DMA reads (`rd`, `rs1`, `rs2`, or `dma.config`'s source,
      all read when the transfer completes);
    - issues another command on channel N, or a DMA whose VMEM range overlaps it;
-   - is a completion (rule 6), `ecall` or `ebreak`, or the end of the program.
+   - is a completion (rule 7), `ecall` or `ebreak`, or the end of the program.
 
-   Written waits are kept. Channels are used as written, and commands on different
-   channels keep their queue order (including `dma.config`). The DMA queue is assumed
-   idle at program entry.
-6. **Completion:** mark the CSR write that signals completion with `# atlas.release`,
+   Channels are used as written, and commands on different channels keep their queue
+   order (including `dma.config`). The DMA queue is assumed idle at program entry.
+7. **Completion:** mark the CSR write that signals completion with `# atlas.release`,
    e.g. `csrrwi x0, x1, 0xC10 # atlas.release`. Unmarked CSR writes are ordinary.
-   Before the marked CSR executes, all earlier fixed-latency work has finished and
-   atlas-opt has inserted waits for any pending DMA. A completion gives no host
-   acknowledgment, buffer ownership, or proof that the kernel has left its IMEM slot.
-   What state is observable at a completion is open (§4, item 6).
+   Before the marked CSR executes, all earlier work has finished, DMA included. A
+   completion gives no host acknowledgment, buffer ownership, or proof that the kernel
+   has left its IMEM slot. What state is observable at a completion is open (§4,
+   item 5).
 
-atlas-opt rejects address-dependent instructions, illegal delay slots and ISA
-violations with the line number. It cannot detect a program that is wrong when run
-sequentially; the equivalence harness catches that.
+atlas-opt rejects address-dependent instructions and ISA violations with the line
+number. It cannot detect a program that is wrong when run one instruction at a time;
+the equivalence harness catches that. For today's hand-scheduled kernels, it also
+removes existing `delay`s (keeping `delay N # keep`) and keeps any `dma.wait` it
+finds.
 
 ## 3. Responsibilities
 
@@ -75,14 +78,15 @@ sequentially; the equivalence harness catches that.
 | Which data moves (`dma.load/store`, sizes) | owns | no change |
 | `dma.config` / `dma.base` | owns | keeps them, in queue order |
 | DMA channels | picks them | keeps them |
-| `dma.wait` | optional | inserts missing waits, keeps written ones, and moves independent work around them |
+| `dma.wait` | never writes them | inserts all of them, placed so independent work overlaps the transfer |
 | Registers (x, m, e), MXU choice, weight slots, accumulators | assigns | no change |
-| ISA legality (rule 4) | owns | rejects violations |
+| ISA legality (rule 5) | owns | rejects violations |
 | VLS word addresses (`srli x31, x4, 2`) | writes them correctly | no change |
 | Instruction order | any correct sequential order | reorders within dependences in each basic block |
-| `delay`s and delay slots | may leave them; atlas-opt ignores the delays | inserts the minimum delays; fills empty slots |
+| `delay`s | never writes them | inserts the minimum |
+| Branch delay slots | writes a `nop` after each branch or jump | fills each slot with independent scalar work |
 | Finishing in-flight work before `ecall` / `ebreak` | nothing | drains fixed-latency work and waits for DMA |
-| Completion (`# atlas.release`) | marks the CSR (rule 6) | finishes all earlier work, DMA included, before it; rejects one in a delay slot |
+| Completion (`# atlas.release`) | marks the CSR (rule 7) | finishes all earlier work, DMA included, before it |
 | No-ops | may leave them | removes filler no-ops |
 | Numerics (goldens, tolerances) | owns | no change |
 | FS correctness | checked against the golden reference (functional model owner TBD) | nothing |
@@ -98,23 +102,22 @@ loads whose data is provably still in VMEM. None of these is on this branch.
 
 ## 4. Open items
 
-1. **Delay slots in functional assembly.** This branch keeps the hardware's delay
-   slot in the input; the `clean-up` branch drops it (a branch takes effect
-   immediately). Pick one.
+1. **Delay-slot placeholder.** This branch needs the `nop` after each branch (rule 3);
+   the `clean-up` branch drops it, so a branch takes effect immediately. Merge it.
 2. **Completion syntax.** Main replaced `# atlas.release` with the `atlas.complete`
    instruction (#9); this branch predates it. Rebase onto main.
-3. **Functional model.** Who owns the model that runs FS sequentially, and does it
-   treat a DMA as complete when it issues (rule 5)? Until it exists, FS is only
+3. **Functional model.** Who owns the model that runs `.fs.S` one instruction at a
+   time, with a DMA complete when it issues (rule 6)? Until it exists, FS is only
    checked by running atlas-opt's output on npu_model.
-4. File extensions (`.fs.S` / `.es.S`) and a version header (`# atlas-fs 0`), as on
-   `clean-up`. Not implemented here.
-5. May atlas-opt move VMEM buffers between banks so loads and stores overlap? Declaring
+4. May atlas-opt move VMEM buffers between banks so loads and stores overlap? Declaring
    scratch DRAM would also let it drop stores to regions dead at exit.
-6. **What is live at exit and at a completion?** This contract says only DRAM, but
+5. **What is live at exit and at a completion?** This contract says only DRAM, but
    the equivalence harness also compares VMEM, a regression test compares scalar
    registers, and the publication tests read MREGs at the completion. Pick one
    definition (DRAM only, or DRAM plus declared output regions) and make the tests
    follow it. It decides which registers atlas-opt may rename and which loads and
    stores it may drop.
+6. A version header (`# atlas-fs 0`) so tools can reject files for another contract
+   version. Not implemented.
 7. Where shared pieces live (parser, ISA table, both models); several near-copies
    exist today.
