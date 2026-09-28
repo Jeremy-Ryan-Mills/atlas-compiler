@@ -1,4 +1,4 @@
-# atlas-compiler-experiments
+# Atlas Compiler
 
 `atlas-opt` reads Atlas NPU assembly, builds a dependency graph for every basic
 block, and reschedules the code so the engines overlap while every dependence and
