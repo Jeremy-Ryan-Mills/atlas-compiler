@@ -16,6 +16,8 @@ static void usage() {
                  "  --list-passes      list the passes in the order they run\n"
                  "  --dma-timing MODE  robust (default): valid for any DMA latency;\n"
                  "                     model: trust npu_model's DMA latency\n"
+                 "  --scheduler NAME   list (default), portfolio, grasp, anneal, rollout;\n"
+                 "                     NAME:N sets the search effort (iterations or rollout width)\n"
                  "  --check            only simulate the input and report problems\n"
                  "  -q                 print nothing unless something is wrong\n";
 }
@@ -46,6 +48,7 @@ int main(int argc, char** argv) {
             std::stringstream list(argv[++i]);
             for (std::string name; std::getline(list, name, ',');) passNames.push_back(name);
         } else if (a == "--dma-timing" && hasValue) ctx.robustDma = std::string(argv[++i]) != "model";
+        else if (a == "--scheduler" && hasValue) ctx.scheduler = argv[++i];
         else if (a == "--list-passes") {
             for (const Pass& p : allPasses()) std::cout << p.name << "\t" << p.description << "\n";
             return 0;
