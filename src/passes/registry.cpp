@@ -1,4 +1,3 @@
-#include <deque>
 #include <stdexcept>
 
 #include "core/dma_flow.h"
@@ -111,22 +110,7 @@ void runPasses(Code& code, const std::vector<std::string>& names, PassContext& c
                                          ": insert-dma-waits requires strip-artifacts to move DMA commands out of delay slots");
         }
     }
-    if (insertsDmaWaits && !code.blocks.empty()) {
-        std::deque<int> work{0};
-        std::vector<bool> reached(code.blocks.size(), false);
-        reached[0] = true;
-        while (!work.empty()) {
-            const Block& block = code.blocks[work.front()];
-            work.pop_front();
-            if (block.unknownSuccs)
-                throw std::runtime_error("insert-dma-waits requires known control-flow successors");
-            for (int successor : block.succs) {
-                if (successor < 0 || successor >= (int)code.blocks.size())
-                    throw std::runtime_error("insert-dma-waits encountered an invalid control-flow successor");
-                if (!reached[successor]) work.push_back(successor), reached[successor] = true;
-            }
-        }
-    }
+    if (insertsDmaWaits) requireKnownSuccessors(code, "insert-dma-waits");
     for (const std::string& name : names) {
         bool known = false;
         for (const Pass& p : allPasses()) known |= name == p.name;

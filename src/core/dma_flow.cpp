@@ -8,6 +8,24 @@
 #include <tuple>
 
 #include "core/machine.h"
+#include "core/values.h"
+
+void requireKnownSuccessors(const Code& code, const std::string& who) {
+    if (code.blocks.empty()) return;
+    std::vector<bool> reached(code.blocks.size(), false);
+    std::deque<int> work{0};
+    reached[0] = true;
+    while (!work.empty()) {
+        const Block& block = code.blocks[work.front()];
+        work.pop_front();
+        if (block.unknownSuccs) throw std::runtime_error(who + " requires known control-flow successors");
+        for (int successor : block.succs) {
+            if (successor < 0 || successor >= (int)code.blocks.size())
+                throw std::runtime_error(who + " encountered an invalid control-flow successor");
+            if (!reached[successor]) work.push_back(successor), reached[successor] = true;
+        }
+    }
+}
 
 unsigned pendingDmaChannels(const PendingDma& pending) {
     unsigned mask = 0;
@@ -78,8 +96,9 @@ struct Step {
 
 DmaFlow analyzeDmaFlow(const Code& code, const DmaWaitPlan& waits) {
     size_t count = code.blocks.size();
-    DmaFlow flow{std::vector<std::vector<PendingDma>>(count), std::vector<bool>(count, false)};
+    DmaFlow flow{std::vector<std::vector<PendingDma>>(count), std::vector<bool>(count, false), {}};
     if (count == 0) return flow;
+    requireKnownSuccessors(code, "DMA analysis");
 
     std::map<std::string, int> labels;
     for (size_t b = 0; b < count; b++)
@@ -110,16 +129,23 @@ DmaFlow analyzeDmaFlow(const Code& code, const DmaWaitPlan& waits) {
         if (c != 0) killedBy[c] |= branch.bit;
     }
 
+    // Number the DMA commands (pending site IDs) and record each one's footprint.
+    std::vector<RegValues> entry = blockEntryValues(code);
     std::vector<std::vector<Step>> steps(count);
     int command = 0;
     for (size_t b = 0; b < count; b++) {
+        RegValues regs = entry[b];
         for (const Instr& in : blockInstructions(code.blocks[b])) {
             Step step{in};
-            if (in.op->engine == Engine::Dma && in.op->opClass != OpClass::DmaWait) step.command = command++;
+            if (in.op->engine == Engine::Dma && in.op->opClass != OpClass::DmaWait) {
+                step.command = command++;
+                flow.commands.push_back(footprintOf(in, regs));
+            }
             for (const Access& access : footprintOf(in, unknownRegs()).accesses)
                 if (access.res == Res::XReg && access.write && access.first != 0)
                     step.kills |= killedBy[access.first];
             steps[b].push_back(std::move(step));
+            applyScalar(in, regs);
         }
         flow.before[b].resize(steps[b].size() + 1);
     }
@@ -132,10 +158,6 @@ DmaFlow analyzeDmaFlow(const Code& code, const DmaWaitPlan& waits) {
 
     auto transfer = [&](int b, State state, bool record) {
         const Block& block = code.blocks[b];
-        if (block.unknownSuccs) throw std::runtime_error("DMA analysis requires known control-flow successors");
-        for (int successor : block.succs)
-            if (successor < 0 || successor >= (int)count)
-                throw std::runtime_error("DMA analysis encountered an invalid control-flow successor");
         auto boundary = [&](State& current, size_t i) {
             if (record) joinPending(flow.before[b][i], current.pending);
             if (!waits.empty()) {
@@ -156,8 +178,6 @@ DmaFlow analyzeDmaFlow(const Code& code, const DmaWaitPlan& waits) {
             current.truth &= current.known;
         };
         auto propagate = [&](int successor, const State& next) {
-            if (successor < 0 || successor >= (int)count)
-                throw std::runtime_error("DMA analysis encountered an invalid control-flow successor");
             if (!record && joinState(entries[successor], next) && !queued[successor]) {
                 work.push_back(successor);
                 queued[successor] = true;

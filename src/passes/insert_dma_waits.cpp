@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <deque>
 #include <stdexcept>
 
 #include "core/depgraph.h"
@@ -57,20 +56,7 @@ unsigned requiredWaits(const Pending& pending, const Step& step, const std::vect
 }
 
 void validateFlow(const Code& code) {
-    std::vector<bool> reached(code.blocks.size(), false);
-    std::deque<int> work;
-    if (!code.blocks.empty()) work.push_back(0), reached[0] = true;
-    while (!work.empty()) {
-        const Block& block = code.blocks[work.front()];
-        work.pop_front();
-        if (block.unknownSuccs)
-            throw std::runtime_error("insert-dma-waits requires known control-flow successors");
-        for (int successor : block.succs) {
-            if (successor < 0 || successor >= (int)code.blocks.size())
-                throw std::runtime_error("insert-dma-waits encountered an invalid control-flow successor");
-            if (!reached[successor]) work.push_back(successor), reached[successor] = true;
-        }
-    }
+    requireKnownSuccessors(code, "insert-dma-waits");
     for (const Block& block : code.blocks) {
         if (block.slot && block.slot->op->engine == Engine::Dma && block.slot->op->opClass != OpClass::DmaWait)
             throw std::runtime_error("line " + std::to_string(block.slot->line) +
@@ -110,18 +96,13 @@ void insertDmaWaits(Code& code, PassContext& ctx) {
     size_t exit = candidate.blocks.size() - 1;
     std::vector<RegValues> entries = blockEntryValues(candidate);
     std::vector<Plan> plans(candidate.blocks.size());
-    std::vector<Footprint> commands;
     for (size_t index = 0; index < candidate.blocks.size(); index++) {
         const Block& block = candidate.blocks[index];
         Plan& plan = plans[index];
         plan.waits.resize(block.body.size() + 1, 0);
         RegValues regs = entries[index];
         auto addStep = [&](const Instr& in, size_t boundary) {
-            Step step{in, footprintOf(in, regs), boundary};
-            if (in.op->engine == Engine::Dma && in.op->opClass != OpClass::DmaWait) {
-                commands.push_back(step.footprint);
-            }
-            plan.steps.push_back(std::move(step));
+            plan.steps.push_back({in, footprintOf(in, regs), boundary});
             applyScalar(in, regs);
         };
         for (size_t i = 0; i < block.body.size(); i++) addStep(block.body[i], i);
@@ -143,7 +124,7 @@ void insertDmaWaits(Code& code, PassContext& ctx) {
                 Pending pending = flow.before[index][i];
                 unsigned& waits = plan.waits[step.boundary];
                 clearChannels(pending, waits);
-                unsigned needed = requiredWaits(pending, step, commands);
+                unsigned needed = requiredWaits(pending, step, flow.commands);
                 changed |= (needed & ~waits) != 0;
                 waits |= needed;
             }

@@ -153,19 +153,10 @@ void schedule(Code& code, PassContext& ctx) {
     std::vector<IncomingDma> incoming(code.blocks.size());
     if (knownFlow) {
         DmaFlow flow = analyzeDmaFlow(code);
-        std::vector<Footprint> commands;
-        for (size_t b = 0; b < code.blocks.size(); b++) {
-            RegValues regs = entry[b];
-            for (const Instr& in : blockInstructions(code.blocks[b])) {
-                if (in.op->engine == Engine::Dma && in.op->opClass != OpClass::DmaWait)
-                    commands.push_back(footprintOf(in, regs));
-                applyScalar(in, regs);
-            }
-        }
         for (size_t b = 0; b < code.blocks.size(); b++)
             for (int channel = 0; channel < 8; channel++)
                 for (int command : flow.before[b].front()[channel])
-                    incoming[b][channel].push_back(commands[command]);
+                    incoming[b][channel].push_back(flow.commands[command]);
     }
     for (size_t bi = 0; bi < code.blocks.size(); bi++) {
         try {
