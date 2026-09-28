@@ -73,6 +73,11 @@ operand ordering is reversed by hw.array_get's index convention.
                 elif op['identity_wire'] and widths == [size]: kind = 'wire'
                 elif kind in ('comb.and', 'comb.or', 'comb.xor', 'comb.add'):
                     require(args and all(w == size for w in widths), 'Unsupported timing arithmetic widths')
+                elif kind == 'comb.shl':
+                    require(widths == [size, size], 'Unsupported timing shift widths')
+                elif kind == 'comb.replicate':
+                    require(len(widths) == 1 and size % widths[0] == 0, 'Unsupported timing replicate widths')
+                    extra = widths[0]
                 elif kind == 'comb.mux': require(widths == [1, size, size], 'Unsupported timing mux widths')
                 elif kind == 'comb.icmp':
                     require(len(widths) == 2 and widths[0] == widths[1] and size == 1 and
@@ -112,6 +117,9 @@ operand ordering is reversed by hw.array_get's index convention.
             elif kind == 'comb.mux': value = data[1] if data[0] else data[2]
             elif kind == 'comb.icmp': value = int(data[0] == data[1]) ^ extra
             elif kind == 'comb.extract': value = data[0] >> extra
+            elif kind == 'comb.shl': value = 0 if data[1] >= width else data[0] << data[1]
+            elif kind == 'comb.replicate':
+                value = sum(data[0] << offset for offset in range(0, width, extra))
             elif kind == 'comb.concat':
                 value = 0
                 for part, size in zip(data, extra): value = (value << size) | part
