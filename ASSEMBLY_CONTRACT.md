@@ -6,7 +6,7 @@ model ──model mapping──▶ kernel.fs.S ──atlas-opt──▶ kernel.e
 ```
 
 - **Model mapping** decides *what* the NPU computes and *where data lives*: fusion,
-  tiling, loops, layout, buffer allocation, DMA channels.
+  tiling, loops, layout, buffer allocation.
 - **atlas-opt** decides *when* each instruction issues: it inserts every `dma.wait`,
   fills every branch delay slot, and adds the minimum `delay`s.
 - The functional assembly (FS) is the only interface. It contains no timing.
@@ -16,7 +16,7 @@ model ──model mapping──▶ kernel.fs.S ──atlas-opt──▶ kernel.e
 | | Functional (`.fs.S`) | Executable (`.es.S`) |
 |---|---|---|
 | Written by | model mapping | atlas-opt |
-| Semantics | one instruction at a time; a DMA is complete when it issues | npu_model `rtl-match` timing |
+| Semantics | one instruction at a time; a DMA is complete when it issues | the hardware's timing, as modeled by npu_model |
 | `delay` | none | the minimum needed |
 | Branches and jumps | followed by a `nop`, the empty delay slot | slot filled with independent scalar work, or left `nop` |
 | `dma.wait` | none | wherever the program needs a transfer finished |
@@ -28,7 +28,7 @@ extensions are a naming convention; atlas-opt takes any path
 
 **Equivalence:** the executable program leaves the same DRAM contents at exit as the
 functional one. Only DRAM is live at exit; registers, VMEM, weight slots and
-accumulators may differ. (The tests are stricter today; see §4, item 5.)
+accumulators may differ. (The tests are stricter today; see §4, item 4.)
 
 ## 2. Rules for functional assembly
 
@@ -52,14 +52,15 @@ accumulators may differ. (The tests are stricter today; see §4, item 5.)
    - issues another command on channel N, or a DMA whose VMEM range overlaps it;
    - is a completion (rule 7), `ecall` or `ebreak`, or the end of the program.
 
-   Channels are used as written, and commands on different channels keep their queue
-   order (including `dma.config`). The DMA queue is assumed idle at program entry.
+   Channels are kept as written for now, and commands on different channels keep
+   their queue order (including `dma.config`). The DMA queue is assumed idle at
+   program entry.
 7. **Completion:** mark the CSR write that signals completion with `# atlas.release`,
    e.g. `csrrwi x0, x1, 0xC10 # atlas.release`. Unmarked CSR writes are ordinary.
    Before the marked CSR executes, all earlier work has finished, DMA included. A
    completion gives no host acknowledgment, buffer ownership, or proof that the kernel
    has left its IMEM slot. What state is observable at a completion is open (§4,
-   item 5).
+   item 4).
 
 atlas-opt rejects address-dependent instructions and ISA violations with the line
 number. It cannot detect a program that is wrong when run one instruction at a time;
@@ -75,7 +76,7 @@ the equivalence harness catches that.
 | DRAM and VMEM addresses | owns | no change |
 | Which data moves (`dma.load/store`, sizes) | owns | no change |
 | `dma.config` / `dma.base` | owns | keeps them, in queue order |
-| DMA channels | picks them | keeps them |
+| DMA channels | writes any channel (the syntax requires one) | may reassign; not implemented yet (channels are kept as written) |
 | `dma.wait` | never writes them | inserts all of them, placed so independent work overlaps the transfer |
 | Registers (x, m, e), MXU choice, weight slots, accumulators | assigns | no change |
 | ISA legality (rule 5) | owns | rejects violations |
@@ -96,26 +97,25 @@ belongs to atlas-opt.
 
 The contract also allows atlas-opt, later, to rename registers, reassign DMA
 channels, move matmul groups between MXUs, fold VLS address conversions, and drop
-loads whose data is provably still in VMEM. None of these is on this branch.
+loads whose data is provably still in VMEM. None of these is implemented yet.
 
 ## 4. Open items
 
-1. **Delay-slot placeholder.** This branch needs the `nop` after each branch (rule 3);
-   the `clean-up` branch drops it, so a branch takes effect immediately. Merge it.
-2. **Completion syntax.** Main replaced `# atlas.release` with the `atlas.complete`
-   instruction (#9); this branch predates it. Rebase onto main.
-3. **Functional model.** Who owns the model that runs `.fs.S` one instruction at a
+1. **Delay-slot placeholder.** Rule 3 still asks model mapping for a `nop` after each
+   branch or jump. Dropping it, so a branch in `.fs.S` takes effect immediately, would
+   leave delay slots entirely to atlas-opt.
+2. **Functional model.** Who owns the model that runs `.fs.S` one instruction at a
    time, with a DMA complete when it issues (rule 6)? Until it exists, FS is only
    checked by running atlas-opt's output on npu_model.
-4. May atlas-opt move VMEM buffers between banks so loads and stores overlap? Declaring
+3. May atlas-opt move VMEM buffers between banks so loads and stores overlap? Declaring
    scratch DRAM would also let it drop stores to regions dead at exit.
-5. **What is live at exit and at a completion?** This contract says only DRAM, but
+4. **What is live at exit and at a completion?** This contract says only DRAM, but
    the equivalence harness also compares VMEM, a regression test compares scalar
    registers, and the publication tests read MREGs at the completion. Pick one
    definition (DRAM only, or DRAM plus declared output regions) and make the tests
    follow it. It decides which registers atlas-opt may rename and which loads and
    stores it may drop.
-6. A version header (`# atlas-fs 0`) so tools can reject files for another contract
+5. A version header (`# atlas-fs 0`) so tools can reject files for another contract
    version. Not implemented.
-7. Where shared pieces live (parser, ISA table, both models); several near-copies
+6. Where shared pieces live (parser, ISA table, both models); several near-copies
    exist today.
