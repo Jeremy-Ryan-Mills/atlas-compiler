@@ -1,0 +1,13 @@
+schema=atlas-lsu-profile-v1
+config=EE290SimConfig
+source_ir_sha256=d2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2
+evidence_sha256=8611aaf02d0ebd781dcc7b3112ceff1fdecc307c093b7b8767c49239be24a25e
+rows=32
+row_step=1
+operand_capture=issue
+vload_read_age=1
+vload_write_age=3
+vload_first_free_age=35
+vstore_read_age=1
+vstore_write_age=3
+vstore_first_free_age=35

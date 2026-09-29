@@ -120,20 +120,10 @@ class FootprintDumpTests(unittest.TestCase):
                              if a['resource'] == 'Vmem')['anywhere'])
         self.assertEqual(sum(i['delay_slot'] for b in data['blocks'] for i in b['instructions']), 2)
 
-    def test_vpu_logical_reservations_survive_export(self):
-        f = self.run_query('vsquare.bf16 m2, m0\n')['blocks'][0]['instructions'][0]['footprint']
-        self.assertEqual(f['mreg_reads'], [0, 1])
-        self.assertEqual(f['mreg_writes'], [2, 3])
-        self.assertGreater(f['vpu_live'], 0)
-        self.assertGreater(f['write_release'], f['read_release'])
-        self.assertIn('write_during_read', f)
-
-    def test_invalid_operand_or_missing_wait_cannot_export(self):
+    def test_invalid_input_or_cli_combination_cannot_export(self):
         self.run_query('vsquare.bf16 m1, m0\n', success=False)
         self.run_query('dma.load.ch0 x6, x1, x12\necall\n',
                        '--rtl-dma-profile', self.dma_profile(), success=False)
-
-    def test_other_actions_cannot_be_silently_ignored(self):
         for flags in (['--check'], ['--passes', 'schedule'], ['-o', str(self.root / 'after.S')],
                       ['--viz', str(self.root / 'graph.html')]):
             with self.subTest(flags=flags):

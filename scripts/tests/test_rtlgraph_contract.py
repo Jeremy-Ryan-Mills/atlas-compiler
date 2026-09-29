@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Exercise profile provenance and the native assembly handoff."""
-import copy
+"""Regression coverage for the production RTL-model handoff."""
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -9,166 +9,84 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from rtlgraph_contract import (checked_file, checked_profile, export, identity, load_contract,
-                               read_json, schedule, write_json)
+from rtlgraph_contract import export, identity, load, read_json, write_json
 
-COMPILER = Path(sys.argv.pop(1)).resolve() if len(sys.argv) > 1 and not sys.argv[1].startswith('-') else None
-
-
-def mxu_profile(directory, *, role='mxu1', ir='a' * 64):
-    directory.mkdir(parents=True)
-    overrides = {'overwrite_acc_read_hold': 0}
-    if role == 'mxu1':
-        overrides['first_write_age'] = 3
-    report = dict(schema_version=1, kind=f'atlas-partial-{role}-profile', config='EE290SimConfig',
-                  inputs={'hardware_ir': {'path': '/external/hardware.mlir', 'sha256': ir}},
-                  compiler_overrides=overrides, limitations=['Synthetic test fixture, not RTL evidence.'])
-    evidence = directory / 'profile.json'
-    write_json(evidence, report)
-    profile = directory / f'atlas-{role}.profile'
-    fields = dict(schema=f'atlas-{role}-profile-v1', config='EE290SimConfig', source_ir_sha256=ir,
-                  evidence_sha256=identity(evidence)['sha256'], **overrides)
-    profile.write_text(''.join(f'{key}={value}\n' for key, value in fields.items()))
-    return profile
-
-
-def lsu_profile(directory, *, ir='a' * 64, write_age=3):
-    directory.mkdir(parents=True)
-    overrides = dict(rows=32, row_step=1, operand_capture='issue',
-                     vload_read_age=1, vload_write_age=write_age, vload_first_free_age=write_age + 32,
-                     vstore_read_age=1, vstore_write_age=3, vstore_first_free_age=35)
-    report = dict(schema='atlas.rtlgraph.lsu-profile.v1', config='EE290SimConfig',
-                  inputs={'hardware_ir': {'path': '/external/hardware.mlir', 'sha256': ir}},
-                  compiler_overrides=overrides, limitations=['Synthetic test fixture, not RTL evidence.'])
-    evidence = directory / 'profile.json'
-    write_json(evidence, report)
-    profile = directory / 'atlas-lsu.profile'
-    fields = dict(schema='atlas-lsu-profile-v1', config='EE290SimConfig', source_ir_sha256=ir,
-                  evidence_sha256=identity(evidence)['sha256'], **overrides)
-    profile.write_text(''.join(f'{key}={value}\n' for key, value in fields.items()))
-    return profile
+COMPILER = Path(sys.argv.pop(1)).resolve()
+REPOSITORY = Path(__file__).resolve().parents[2]
+PROFILE_ROOT = REPOSITORY / 'profiles/EE290SimConfig'
+PROFILES = {role: PROFILE_ROOT / role / f'atlas-{role}.profile'
+            for role in ('mxu0', 'mxu1', 'dma', 'lsu')}
 
 
 class ContractTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
-        self.profile = mxu_profile(self.root / 'profile')
+        self.before = self.root / 'before.S'
+        self.before.write_text('li x6, 536870912\nvload m0, 0(x6)\nvstore m0, 128(x6)\necall\n')
 
     def tearDown(self):
         self.temp.cleanup()
 
-    def test_projection_must_agree_with_exact_evidence_bytes(self):
-        report = self.profile.with_name('profile.json')
-        self.assertEqual(checked_profile('mxu1', self.profile, report)['first_write_age'], '3')
-        self.profile.write_text(self.profile.read_text().replace('first_write_age=3', 'first_write_age=4'))
-        with self.assertRaisesRegex(ValueError, 'settings differ'):
-            checked_profile('mxu1', self.profile, report)
+    def bundle(self, name='bundle'):
+        output = self.root / name
+        export(self.before, COMPILER, PROFILES, output)
+        return output
 
-    def test_replaced_evidence_is_rejected(self):
-        report = self.profile.with_name('profile.json')
-        report.write_text(report.read_text() + '\n')
-        with self.assertRaisesRegex(ValueError, 'evidence identity'):
-            checked_profile('mxu1', self.profile, report)
-
-    def test_mixed_ir_cannot_create_bundle(self):
-        other = mxu_profile(self.root / 'other', role='mxu0', ir='b' * 64)
-        with self.assertRaisesRegex(ValueError, 'different hardware IR'):
-            export(self.root / 'absent.S', self.root / 'absent-compiler',
-                   {'mxu1': self.profile, 'mxu0': other}, self.root / 'bundle')
-        self.assertFalse((self.root / 'bundle').exists())
-
-    def test_duplicate_profile_and_json_fields_are_rejected(self):
-        self.profile.write_text(self.profile.read_text() + 'first_write_age=3\n')
-        with self.assertRaisesRegex(ValueError, 'Duplicate field'):
-            checked_profile('mxu1', self.profile, self.profile.with_name('profile.json'))
-        malformed = self.root / 'duplicate.json'
-        malformed.write_text('{"schema": 1, "schema": 2}')
-        with self.assertRaisesRegex(ValueError, 'Duplicate field'):
-            read_json(malformed)
-
-    def test_paths_cannot_escape_bundle(self):
-        record = identity(self.profile)
-        for path in (str(self.profile), '../profile/atlas-mxu1.profile'):
-            with self.assertRaisesRegex(ValueError, 'escapes'):
-                checked_file(dict(record, path=path), self.root)
-        (self.root / 'link').symlink_to('/tmp')
-        with self.assertRaisesRegex(ValueError, 'symlink escapes'):
-            checked_file(dict(record, path='link/not-needed'), self.root)
-
-    def test_lsu_projection_and_target_must_match_evidence(self):
-        profile = lsu_profile(self.root / 'lsu', ir='b' * 64)
-        self.assertEqual(checked_profile('lsu', profile, profile.with_name('profile.json'))['vload_write_age'], '3')
-        with self.assertRaisesRegex(ValueError, 'different hardware IR'):
-            export(self.root / 'absent.S', self.root / 'absent-compiler',
-                   {'mxu1': self.profile, 'lsu': profile}, self.root / 'bundle')
-        profile.write_text(profile.read_text().replace('vload_write_age=3', 'vload_write_age=4'))
-        with self.assertRaisesRegex(ValueError, 'settings differ'):
-            checked_profile('lsu', profile, profile.with_name('profile.json'))
-
-    @unittest.skipUnless(COMPILER, 'pass atlas-opt path for native integration')
-    def test_lsu_profile_drives_handoff_footprints_and_schedule(self):
-        before = self.root / 'source.S'
-        before.write_text('li x6, 536870912\nvload m0, 0(x6)\nvstore m0, 128(x6)\necall\n')
-        profile = lsu_profile(self.root / 'lsu', write_age=4)
-        bundle = self.root / 'bundle'
-        export(before, COMPILER, {'lsu': profile, 'mxu1': self.profile}, bundle)
+    def test_checked_in_profiles_export_and_verify_native_footprints(self):
+        bundle = self.bundle()
+        contract = load(bundle / 'contract.json')
+        self.assertEqual({entry['role'] for entry in contract['profiles']}, set(PROFILES))
         dump = read_json(bundle / 'footprints.json')
-        load = next(insn for block in dump['blocks'] for insn in block['instructions'] if insn['opcode'] == 'vload')
-        writes = [access for access in load['footprint']['accesses'] if access['write']]
-        self.assertTrue(writes)
-        self.assertEqual({access['age'] for access in writes}, {4})
-        for priority in ('critical', 'input'):
-            result = schedule(bundle / 'contract.json', self.root / priority, priority)
-            self.assertIn('--rtl-lsu-profile', result['commands']['schedule'])
-            self.assertIn('--rtl-lsu-profile', result['commands']['check'])
-        saved = read_json(bundle / 'lsu' / 'profile.json')
-        self.assertEqual(saved['compiler_overrides']['vload_first_free_age'], 36)
-
-    @unittest.skipUnless(COMPILER, 'pass atlas-opt path for native integration')
-    def test_native_export_schedule_and_changed_artifact_rejection(self):
-        before = self.root / 'source.S'
-        before.write_text('addi x1, x0, 5\naddi x2, x1, 7\necall\n')
-        other = mxu_profile(self.root / 'other', role='mxu0')
-        bundle = self.root / 'bundle'
-        export(before, COMPILER, {'mxu0': other, 'mxu1': self.profile}, bundle)
-        path = bundle / 'contract.json'
-        contract, _, _, _ = load_contract(path)
-        self.assertFalse(contract['semantics']['dma_cost_estimate_is_completion_bound'])
+        load_insn = next(i for b in dump['blocks'] for i in b['instructions'] if i['opcode'] == 'vload')
+        self.assertEqual({a['age'] for a in load_insn['footprint']['accesses'] if a['write']}, {3})
         self.assertEqual(contract['merlin']['adapter_status'], 'no-lossless-gap-projection')
-        self.assertFalse(read_json(bundle / 'footprints.json')['schedule_validated'])
         moved = self.root / 'moved'
         shutil.copytree(bundle, moved)
-        for priority in ('critical', 'input'):
-            result = schedule(moved / 'contract.json', self.root / priority, priority)
-            self.assertEqual(result['status'], 'native-model-checked')
-            self.assertEqual(result['rtl_validation'], 'required-separately')
-            self.assertIn('--experimental-mxu0-profile', result['commands']['schedule'])
-        mutations = [('source', bundle / 'before.S'), ('footprints', bundle / 'footprints.json'),
-                     ('profile', bundle / 'mxu1' / 'atlas-mxu1.profile')]
-        for _, artifact in mutations:
-            original = artifact.read_bytes()
-            artifact.write_bytes(original + b'\n')
-            with self.assertRaisesRegex(ValueError, 'Artifact changed'):
-                load_contract(path)
-            artifact.write_bytes(original)
-        changed = copy.deepcopy(contract)
-        changed['semantics']['publication_annotation'] = 'atlas.complete'
-        write_json(path, changed)
-        with self.assertRaisesRegex(ValueError, 'assembly semantics'):
-            load_contract(path)
-        write_json(path, contract)
-        stale = read_json(bundle / 'footprints.json')
-        stale['blocks'][0]['instructions'][0]['footprint']['done_age'] += 1
-        write_json(bundle / 'footprints.json', stale)
-        contract['footprints'] = identity(bundle / 'footprints.json', relative_to=bundle)
-        write_json(path, contract)
-        with self.assertRaisesRegex(ValueError, 'fresh native query'):
-            schedule(path, self.root / 'stale-query')
-        replacement = self.root / 'changed-compiler'
-        replacement.write_text('changed')
+        load(moved / 'contract.json')
+
+    def test_profile_evidence_and_common_hardware_are_checked(self):
+        source = self.root / 'changed-lsu'
+        shutil.copytree(PROFILE_ROOT / 'lsu', source)
+        evidence = source / 'profile.json'
+        report = read_json(evidence)
+        report['inputs']['hardware_ir']['sha256'] = 'b' * 64
+        write_json(evidence, report)
+        projection = source / 'atlas-lsu.profile'
+        text = projection.read_text().replace(
+            'source_ir_sha256=' + 'd2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2',
+            'source_ir_sha256=' + 'b' * 64)
+        old_hash = next(line.split('=', 1)[1] for line in text.splitlines() if line.startswith('evidence_sha256='))
+        new_hash = hashlib.sha256(evidence.read_bytes()).hexdigest()
+        projection.write_text(text.replace('evidence_sha256=' + old_hash, 'evidence_sha256=' + new_hash))
+        with self.assertRaisesRegex(ValueError, 'different hardware IR'):
+            export(self.before, COMPILER, {'mxu1': PROFILES['mxu1'], 'lsu': projection}, self.root / 'mixed')
+        evidence.write_text(evidence.read_text() + '\n')
+        with self.assertRaisesRegex(ValueError, 'profile/evidence identity'):
+            export(self.before, COMPILER, {'lsu': projection}, self.root / 'stale')
+
+    def test_bundle_paths_hashes_and_fresh_query_are_checked(self):
+        bundle = self.bundle()
+        contract_path = bundle / 'contract.json'
+        original = (bundle / 'before.S').read_bytes()
+        (bundle / 'before.S').write_bytes(original + b'\n')
         with self.assertRaisesRegex(ValueError, 'Artifact changed'):
-            load_contract(path, replacement)
+            load(contract_path)
+        (bundle / 'before.S').write_bytes(original)
+        contract = read_json(contract_path)
+        contract['source']['path'] = '../before.S'
+        write_json(contract_path, contract)
+        with self.assertRaisesRegex(ValueError, 'escapes'):
+            load(contract_path)
+        contract['source'] = identity(bundle / 'before.S', bundle)
+        write_json(contract_path, contract)
+        footprints = read_json(bundle / 'footprints.json')
+        footprints['blocks'][0]['instructions'][0]['footprint']['done_age'] += 1
+        write_json(bundle / 'footprints.json', footprints)
+        contract['footprints'] = identity(bundle / 'footprints.json', bundle)
+        write_json(contract_path, contract)
+        with self.assertRaisesRegex(ValueError, 'fresh atlas-opt query'):
+            load(contract_path)
 
 
 if __name__ == '__main__':

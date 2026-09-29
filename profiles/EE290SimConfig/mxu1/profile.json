@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "kind": "atlas-partial-mxu1-profile",
+  "config": "EE290SimConfig",
+  "status": "structural_facts_and_finite_trace_agree",
+  "inputs": {
+    "hardware_ir": {
+      "sha256": "d2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2"
+    }
+  },
+  "compiler_overrides": {
+    "first_write_age": 3,
+    "overwrite_acc_read_hold": 0
+  },
+  "scope": "Partial MXU1 write and accumulator-read projection from typed CIRCT and a checked trace.",
+  "limitations": [
+    "Request and feed ages were validated in a finite execution.",
+    "Other timing and resource rules remain inherited."
+  ],
+  "provenance": {
+    "extraction_commit": "dd7342ce6a3c4d051544bf719086edb59cb80765",
+    "detail": "The extraction tools, mutation tests, and full evidence ledger remain in Git history at this commit."
+  }
+}

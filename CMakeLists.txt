@@ -39,27 +39,12 @@ add_test(NAME publication-dma-tests COMMAND publication-dma-tests)
 
 add_executable(machine-profile-tests tests/machine_profile_tests.cpp)
 target_link_libraries(machine-profile-tests atlas)
+target_compile_definitions(machine-profile-tests PRIVATE ATLAS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME machine-profile-tests COMMAND machine-profile-tests)
-
-add_executable(lsu-profile-tests tests/lsu_profile_tests.cpp)
-target_link_libraries(lsu-profile-tests atlas)
-add_test(NAME lsu-profile-tests COMMAND lsu-profile-tests)
-
-add_executable(schedule-priority-tests tests/schedule_priority_tests.cpp)
-target_link_libraries(schedule-priority-tests atlas)
-add_test(NAME schedule-priority-tests COMMAND schedule-priority-tests)
 
 add_executable(rtl-dma-tests tests/rtl_dma_tests.cpp)
 target_link_libraries(rtl-dma-tests atlas)
 add_test(NAME rtl-dma-tests COMMAND rtl-dma-tests)
-
-add_executable(rtl-dma-simulator-tests tests/rtl_dma_simulator_tests.cpp)
-target_link_libraries(rtl-dma-simulator-tests atlas)
-add_test(NAME rtl-dma-simulator-tests COMMAND rtl-dma-simulator-tests)
-
-add_executable(rtl-dma-range-tests tests/rtl_dma_range_tests.cpp)
-target_link_libraries(rtl-dma-range-tests atlas)
-add_test(NAME rtl-dma-range-tests COMMAND rtl-dma-range-tests)
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
@@ -67,6 +52,4 @@ if(Python3_Interpreter_FOUND)
     ${CMAKE_SOURCE_DIR}/tests/footprint_dump_tests.py $<TARGET_FILE:atlas-opt>)
   add_test(NAME rtlgraph-contract-tests COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_SOURCE_DIR}/scripts/tests/test_rtlgraph_contract.py $<TARGET_FILE:atlas-opt>)
-  add_test(NAME rtlgraph-lsu-profile-tests COMMAND ${Python3_EXECUTABLE} -B
-    ${CMAKE_SOURCE_DIR}/scripts/tests/test_rtlgraph_lsu_profile.py)
 endif()

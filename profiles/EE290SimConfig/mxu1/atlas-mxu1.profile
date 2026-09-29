@@ -1,0 +1,6 @@
+schema=atlas-mxu1-profile-v1
+config=EE290SimConfig
+source_ir_sha256=d2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2
+evidence_sha256=94bc62ecc1bd05868208f159dc2c094593384c1748b5a37e62a09455d41cdb0f
+first_write_age=3
+overwrite_acc_read_hold=0

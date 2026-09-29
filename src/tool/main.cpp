@@ -23,7 +23,6 @@ static void usage() {
                  "  --experimental-mxu0-profile FILE  use a partial MXU0 resource profile\n"
                  "  --rtl-dma-profile FILE  use partial RTL DMA capture/completion rules\n"
                  "  --rtl-lsu-profile FILE  use partial RTL VLOAD/VSTORE timing rules\n"
-                 "  --schedule-priority MODE  critical (default) or input; ready-work ranking\n"
                  "  -q                 print nothing unless something is wrong\n";
 }
 
@@ -54,15 +53,6 @@ int main(int argc, char** argv) {
         else if (a == "--experimental-mxu0-profile" && hasValue) mxu0ProfilePath = argv[++i];
         else if (a == "--rtl-dma-profile" && hasValue) dmaProfilePath = argv[++i];
         else if (a == "--rtl-lsu-profile" && hasValue) lsuProfilePath = argv[++i];
-        else if (a == "--schedule-priority" && hasValue) {
-            std::string mode = argv[++i];
-            if (mode == "input") ctx.schedulePriority = SchedulePriority::Input;
-            else if (mode == "critical") ctx.schedulePriority = SchedulePriority::Critical;
-            else {
-                std::cerr << "atlas-opt: --schedule-priority must be critical or input\n";
-                return 2;
-            }
-        }
         else if (a == "--passes" && hasValue) {
             requestedPasses = true;
             std::stringstream list(argv[++i]);

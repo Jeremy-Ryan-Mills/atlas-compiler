@@ -3,6 +3,7 @@
 #include <string>
 
 #include "core/depgraph.h"
+#include "core/simulator.h"
 #include "passes/pass.h"
 
 static int checks = 0;
@@ -15,6 +16,12 @@ static void check(bool condition, const std::string& reason) {
 static MachineModel rtlModel() {
     MachineModel model;
     model.rtlDma = true;
+    return model;
+}
+
+static MachineModel rangedModel() {
+    MachineModel model = rtlModel();
+    model.rtlDmaRanges = true;
     return model;
 }
 
@@ -36,6 +43,31 @@ static DepGraph graph(const std::string& source, const RegValues& entry = entryV
 static const Edge* edge(const DepGraph& g, int from, int to) {
     for (const Edge& e : g.edges) if (e.from == from && e.to == to) return &e;
     return nullptr;
+}
+
+static Access dram(const Footprint& footprint) {
+    for (const auto& access : footprint.accesses)
+        if (access.res == Res::Dram) return access;
+    throw std::runtime_error("missing DRAM footprint");
+}
+
+static bool contains(const SimResult& result, const std::string& reason) {
+    for (const auto& violation : result.violations)
+        if (violation.find(reason) != std::string::npos) return true;
+    return false;
+}
+
+static SimResult simulateRtl(const std::string& source, const MachineModel& model = rtlModel(),
+                             double scale = 1.0) {
+    SimOptions options;
+    options.model = model;
+    options.dmaLatencyScale = scale;
+    return simulate(parseAsm(source), options);
+}
+
+static void rejectsSimulation(const std::string& source, const std::string& reason,
+                              const MachineModel& model = rtlModel(), double scale = 1.0) {
+    check(contains(simulateRtl(source, model, scale), reason), "simulator accepted unsafe DMA input");
 }
 
 static void rejects(const std::string& source, const std::string& reason,
@@ -133,7 +165,74 @@ int main() {
         auto legacy = buildGraph(parseAsm("dma.config.ch0 x0\n").instrs, zeroRegs());
         check(legacy.footprints[0].dmaCycles == dmaTransferCycles(0), "legacy CONFIG behavior changed");
         buildGraph(parseAsm("dma.load.ch0 x4, x1, x2\nvload m0, 0(x4)\n").instrs, entryValues());
-        std::cout << "PASS: " << checks << " RTL DMA graph and scheduling checks\n";
+
+        // The precise profile captures CONFIG and projects DRAM byte ranges.
+        auto ranged = rangedModel();
+        auto regs = zeroRegs(true);
+        regs[1] = 0x90000000;
+        regs[2] = 32;
+        regs[4] = 0x20000000;
+        const auto store = parseAsm("dma.store.ch0 x1, x4, x2\n").instrs[0];
+        auto range = dram(footprintOf(store, regs, ranged));
+        check(!range.anywhere && range.dramFirstByte == 0x90000000 && range.dramBytes == 32,
+              "known DRAM range was not projected");
+        auto v1 = ranged;
+        v1.rtlDmaRanges = false;
+        check(dram(footprintOf(store, regs, v1)).anywhere, "v1 gained precision without range evidence");
+        auto unknownBase = regs;
+        unknownBase.dmaBase.reset();
+        check(dram(footprintOf(store, unknownBase, ranged)).anywhere,
+              "unknown DMA base lost conservative aliasing");
+        regs.dmaBase = 31;
+        regs[1] = 0xffffffe0;
+        regs[2] = 64;
+        check(dram(footprintOf(store, regs, ranged)).anywhere,
+              "37-bit bus wrap was represented as one interval");
+        regs[2] = 32;
+        range = dram(footprintOf(store, regs, ranged));
+        check(!range.anywhere && range.dramFirstByte == (uint64_t{1} << 37) - 32,
+              "final legal bus line was lost");
+        auto adjacent = regs;
+        adjacent.dmaBase = 0;
+        adjacent[1] = 0;
+        check(!accessesOverlap(range, dram(footprintOf(store, adjacent, ranged))),
+              "disjoint wide ranges spuriously overlap");
+
+        auto config = buildBlocks(parseAsm("addi x9, x0, 1\ndma.config.ch0 x9\nnext:\naddi x9, x0, 2\necall\n"));
+        check(blockEntryValues(config, true)[1].dmaBase == 1,
+              "captured CONFIG did not propagate across an idle block boundary");
+        config = buildBlocks(parseAsm("beq x0, x0, join\nnop\naddi x9, x0, 1\ndma.config.ch0 x9\njoin:\necall\n"));
+        check(!blockEntryValues(config, true).back().dmaBase,
+              "different predecessor CONFIG values did not join to unknown");
+
+        // The simulator independently enforces explicit completion regardless of the cost estimate.
+        const std::string setup = "lui x4, 0x20000\naddi x5, x4, 1024\nlui x1, 0x90000\naddi x2, x0, 32\n";
+        const std::string load = setup + "dma.load.ch0 x4, x1, x2\n";
+        for (double scale : {0.001, 100.0}) {
+            rejectsSimulation(load + "ecall\n", "missing explicit DMA.WAIT", rtlModel(), scale);
+            rejectsSimulation(load + "delay 4095\nvload m0, 0(x4)\ndma.wait.ch0\n",
+                              "until its explicit DMA.WAIT", rtlModel(), scale);
+            auto safe = simulateRtl(load + "vload m0, 0(x5)\ndma.wait.ch0\ndelay 34\nnop\necall\n",
+                                    rtlModel(), scale);
+            check(safe.violations.empty() && safe.stopReason.empty(),
+                  "simulator rejected disjoint work before a DMA wait");
+        }
+        rejectsSimulation(setup + "vstore m0, 0(x4)\ndma.store.ch0 x1, x4, x2\ndma.wait.ch0\n",
+                          "is still accessing", rtlModel(), 100.0);
+
+        Code unsupported = buildBlocks(parseAsm(load + "later:\ndma.wait.ch0\n"));
+        PassContext rtlContext;
+        rtlContext.model = rtlModel();
+        bool rejectedBoundary = false;
+        try { runPasses(unsupported, {"schedule"}, rtlContext); }
+        catch (const std::runtime_error& error) {
+            rejectedBoundary = std::string(error.what()).find("block boundaries") != std::string::npos;
+        }
+        check(rejectedBoundary, "native admission accepted a DMA lifetime across block boundaries");
+
+        auto legacySimulation = simulate(parseAsm("addi x2, x0, 32\ndma.load.ch0 x0, x0, x2\ndelay 100\nnop\necall\n"));
+        check(legacySimulation.violations.empty(), "legacy DMA completion behavior changed");
+        std::cout << "PASS: " << checks << " RTL DMA profile, graph, scheduler and simulator checks\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

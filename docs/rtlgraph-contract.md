@@ -1,108 +1,114 @@
 # Assembly and timing handoff
 
-[`rtlgraph_contract.py`](../scripts/rtlgraph_contract.py#L122-L163) packages native `before.S`,
-selected RTL profiles, their canonical evidence, and the exact compiler identity.
-It queries the existing compiler for operand-resolved footprints and can schedule
-that snapshot into `after.S`. This is a usable boundary for a Merlin emitter;
-it does not implement LLVM lowering or register assignment.
+The RTL-graph handoff gives a compiler emitter a reproducible boundary to the
+existing Atlas scheduler. `rtlgraph_contract.py` packages native `before.S`, the
+selected RTL profiles and evidence, operand-resolved footprints, and the exact
+`atlas-opt` binary. Verification reproduces those footprints before the bundle
+is used to schedule `after.S`.
 
-The emitter must supply `atlas-opt` assembly syntax, explicit `DMA.WAIT`
-instructions, and `# atlas.release` on the CSR that publishes completed output.
-The compiler assumes idle engines, no pending DMA, and zero scalar registers at
-program entry; runtime parameters must be established by emitted setup instructions.
-DMA base reset is known only with the version-2 DMA profile. Arbitrary incoming
-state is unsupported; this handoff defines no dispatch ABI.
-This branch uses `atlas.release`; a different compiler annotation is not silently
-substituted. Baremetal spellings require the existing
-[assembly adapter](rtlgraph-dma-native.md#general-assembly-adapter).
+This is usable by a Merlin emitter today. It does not implement linalg/Atlas/LLVM
+lowering, register assignment, assembly translation, loading, or dispatch.
 
-## Contract contents
+## Input contract
 
-[`atlas.rtlgraph.contract.v1`](../schemas/rtlgraph-contract.schema.json) contains:
+The emitter supplies `atlas-opt` assembly syntax with:
+
+- operations, registers, addresses, and runtime scalar setup resolved;
+- explicit matching `DMA.WAIT` instructions;
+- `# atlas.release` on the CSR that publishes completed output; and
+- idle engines, no pending DMA, and zero scalar registers at entry.
+
+The current subset does not define arbitrary incoming machine state or a dispatch
+ABI. Emitters must produce the native syntax accepted by `atlas-opt`. The
+historical baremetal adapter remains available with the research tooling at
+`dd7342c`.
+This feature does not insert DMA waits.
+
+`atlas.rtlgraph.contract.v1` records:
 
 | Field | Meaning |
 | --- | --- |
-| `config`, `source_ir_sha256` | `EE290SimConfig` and one shared hardware-IR identity |
-| `compiler`, `source` | SHA-256 identities of the binary and bundled `before.S` |
-| `profiles` | Selected DMA/MXU/LSU projections and their unchanged canonical evidence |
-| `footprints` | Native `atlas.footprints.v1` query output for this assembly |
-| `semantics`, `limitations` | Required consumer rules and evidence boundaries |
-| `merlin` | Pinned comparison reference and unsupported gap-only projection |
-| `query` | Exact native query command and log identity |
+| `config`, `source_ir_sha256` | `EE290SimConfig` and the common hardware-IR identity |
+| `compiler`, `source` | SHA-256 identities of `atlas-opt` and bundled `before.S` |
+| `profiles` | Selected MXU0, MXU1, DMA, and LSU projections plus canonical evidence |
+| `footprints` | Native operand-resolved `Access`, `Hold`, reservation, and dependency data |
+| `semantics`, `limitations` | Assembly, age, completion rules, and evidence boundaries |
+| `merlin` | Pinned comparison reference and precision-loss report |
 
-The [native query](../src/core/model_dump.cpp#L71-L139) exports each block's known scalar/base entry state, instructions,
-`Access` row/range ages, inclusive `Hold` intervals and capacities, MREG logical
-reservations, VPU occupancy, completion-cost fields, and dependency edges directly
-from the [machine model](../src/core/machine.h#L20-L96) and the graph builder. Unknown values
-remain unknown. For selected RTL DMA, `at_completion` denotes a memory lifetime
-through its explicit wait; `dma_cycles_estimate` supplies no completion guarantee.
-Physical-port and VPU compatibility rules still require `ReservationTable`, and
-control-flow admission still requires the optimizer. The query marks
-`schedule_validated: false`; it is not a standalone scheduler or legality proof.
+The native footprint query includes known scalar/base entry state, instructions,
+row and byte-range accesses, inclusive resource holds, logical MREG reservations,
+VPU occupancy, completion-cost fields, and dependency edges. Unknown values stay
+unknown. Physical port/capacity checks and control-flow admission still require
+the compiler; a footprint file alone is not a scheduler or legality proof.
 
-Only selected override fields are RTL-derived. The optional [LSU profile](rtlgraph-lsu-timing.md)
-supplies vector read/write ages and path release; scalar LSU timing, logical reservation
-policy, same-cycle visibility, and unselected rules remain inherited. Evidence files retain structural,
-finite-trace, and unproved scopes. Export checks projection/report hashes, settings,
-and common hardware identity; it does not rerun extraction or certify the evidence.
-Bundle files use relative paths; the compiler may be relocated only with matching
-bytes. Referenced hardware/build artifacts inside evidence remain external.
+Only selected fields are RTL-derived. Other rules remain inherited as described
+in the [model guide](rtlgraph-model.md). Export verifies profile/report hashes,
+settings, and common hardware identity, but it does not rerun extraction or
+prove the evidence. A scheduled result still requires numerical and RTL
+validation appropriate to the kernel.
 
-## Run
+## Create and schedule a bundle
 
-Use a freshly built `atlas-opt` with `--dump-footprints`. Run from this repository
-and use fresh output directories. Omit unused profile options.
+Use a freshly built `atlas-opt` that supports `--dump-footprints`:
 
 ```sh
 python3 -B scripts/rtlgraph_contract.py export \
-  --source before.S --atlas-opt build/rtlgraph-lsu-profile/compiler-1/atlas-opt \
-  --dma-profile build/rtlgraph-dram-ranges/profile-2/atlas-dma.profile \
-  --mxu0-profile build/rtlgraph-mxu0/profile-1/atlas-mxu0.profile \
-  --mxu1-profile build/rtlgraph-perf/profile-k64-2/atlas-mxu1.profile \
-  --lsu-profile build/rtlgraph-lsu-profile/profile-1/atlas-lsu.profile \
-  --output build/rtlgraph-contract/handoff-NEW
-python3 -B scripts/rtlgraph_contract.py schedule \
-  --contract build/rtlgraph-contract/handoff-NEW/contract.json \
-  --priority critical --output build/rtlgraph-contract/schedule-NEW
+  --source before.S --atlas-opt build/atlas-opt \
+  --mxu0-profile profiles/EE290SimConfig/mxu0/atlas-mxu0.profile \
+  --mxu1-profile profiles/EE290SimConfig/mxu1/atlas-mxu1.profile \
+  --dma-profile profiles/EE290SimConfig/dma/atlas-dma.profile \
+  --lsu-profile profiles/EE290SimConfig/lsu/atlas-lsu.profile \
+  --output build/rtlgraph-contract/handoff
+
+python3 -B scripts/rtlgraph_contract.py verify \
+  --contract build/rtlgraph-contract/handoff/contract.json
+
+build/atlas-opt build/rtlgraph-contract/handoff/before.S \
+  -o build/rtlgraph-contract/handoff/after.S \
+  --dma-timing robust \
+  --experimental-mxu0-profile build/rtlgraph-contract/handoff/mxu0/atlas-mxu0.profile \
+  --experimental-mxu1-profile build/rtlgraph-contract/handoff/mxu1/atlas-mxu1.profile \
+  --rtl-dma-profile build/rtlgraph-contract/handoff/dma/atlas-dma.profile \
+  --rtl-lsu-profile build/rtlgraph-contract/handoff/lsu/atlas-lsu.profile
 ```
 
-The schedule command first reproduces the saved footprints with the pinned compiler.
-It uses `strip-artifacts,schedule`, robust DMA mode, and the
-bundled profiles, then checks the exact `after.S`. `handoff.json` records commands,
-logs, and artifact identities. Native model checks do not replace RTL replay or
-golden numerical checks. The output remains native assembly. Before using the baremetal assembler, translate
-the supported straight-line subset with `rtlgraph_dma_compile.translate(...,
-to_compiler=False)` and verify its encoding roundtrip, as the existing adapter does.
-Loading and dispatching remain separate.
+Omit unused profiles. The verify step reruns the native footprint query with the
+pinned compiler and requires exact equality. The normal optimizer invocation then
+runs its scheduling and final checks. Bundle artifact paths are relative except
+for the compiler, which may move only when its bytes still match; `verify`
+accepts `--atlas-opt` for that relocated but byte-identical binary.
 
-The fused-attention handoff in `build/rtlgraph-lsu-profile/handoff-1` exports
-256 instructions with all four profiles. Its scheduled native assembly matches
-the existing candidates for both priorities byte-for-byte; this adds no new RTL
-performance claim.
+## Merlin relationship
 
-## Merlin comparison
+The comparison point is
+[`ucb-bar/merlin@81a585b`](https://github.com/ucb-bar/merlin/tree/81a585b857838baeba35bc55eab7db10525db7cb).
+Its Atlas contract expresses
+[`minimum_issue_gap`](https://github.com/ucb-bar/merlin/blob/81a585b857838baeba35bc55eab7db10525db7cb/examples/atlas/phase1/contracts/hwbringup_atlas_v0/schedule_contract.yaml#L32-L120)
+and
+[`register_dependency_gap`](https://github.com/ucb-bar/merlin/blob/81a585b857838baeba35bc55eab7db10525db7cb/examples/atlas/phase1/contracts/hwbringup_atlas_v0/schedule_contract.yaml#L124-L201)
+entries. Those scalar gaps cannot losslessly represent row streams, bank/port
+selection, resource capacity, or variable DMA completion. The bundle therefore
+reports `no-lossless-gap-projection` instead of emitting misleading timing YAML.
 
-The optional Merlin reference was inspected at
-[`81a585b`](https://github.com/ucb-bar/merlin/tree/81a585b857838baeba35bc55eab7db10525db7cb).
-Its [issue-gap entries](https://github.com/ucb-bar/merlin/blob/81a585b857838baeba35bc55eab7db10525db7cb/examples/atlas/phase1/contracts/hwbringup_atlas_v0/schedule_contract.yaml#L32-L120)
-and [register-gap entries](https://github.com/ucb-bar/merlin/blob/81a585b857838baeba35bc55eab7db10525db7cb/examples/atlas/phase1/contracts/hwbringup_atlas_v0/schedule_contract.yaml#L124-L201)
-refer to Python execution-unit timing. Those fields alone cannot preserve row-level
-accesses, resource capacity/port exclusions, or variable DMA completion. The bundle
-reports `no-lossless-gap-projection` and lists these losses; it emits no misleading
-Merlin-compatible timing YAML. Merlin can initially invoke this assembly handoff.
-A native richer-model consumer remains future work; Merlin is not a dependency.
+The immediate integration is:
 
-For LSU, Merlin's emitter supplies `VLOAD`/`VSTORE` operands and buffer allocation;
-the bundle's optional `--lsu-profile` supplies timing to `atlas-opt`. Native footprints
-then resolve the particular rows, VMEM ranges, and bank/path holds for that assembly.
-Merlin can retain those footprints and evidence for diagnostics or a future target
-cost model. A single completion latency would discard the distinction between
-source accesses, destination writes, and path occupancy. The compiler still checks
-the complete dependency and resource rules before emitting a schedule.
+```text
+Merlin lowering and buffer assignment
+    -> native before.S
+    -> RTL profiles + resolved footprints
+    -> atlas-opt scheduling and checking
+    -> after.S
+    -> assembler, execution, and numerical validation
+```
 
-The newer [functional assembly contract](https://github.com/Jeremy-Ryan-Mills/atlas-compiler/blob/3ae2b5d76909c529df14c89933f737f9ab19be8d/ASSEMBLY_CONTRACT.md#L38-L68)
-is a deferred compiler integration task. When combining branches, automatic wait
-insertion must consume the selected model's operand-capture and memory-lifetime
-rules, including DRAM ranges and channel/ring constraints. Test register reuse,
-configuration changes, and memory conflicts before enabling the combined pipeline;
-this feature continues to require explicit waits in its supported subset.
+Merlin can retain the profiles, footprints, and evidence for diagnostics and a
+future target cost model. A richer native consumer should preserve row access
+ages, logical reservations, physical bank/path holds, capacities, and explicit
+completion events.
+
+The newer compiler
+[`ASSEMBLY_CONTRACT.md`](https://github.com/Jeremy-Ryan-Mills/atlas-compiler/blob/3ae2b5d76909c529df14c89933f737f9ab19be8d/ASSEMBLY_CONTRACT.md#L38-L68)
+is a deferred branch-integration concern. Automatic wait insertion must use the
+selected model's issue-time capture, DRAM ranges, channel/ring reuse, and memory
+conflict rules. It should be tested for register reuse and configuration changes
+when the branches meet; it does not require redesigning this handoff.

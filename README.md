@@ -14,14 +14,15 @@ build/atlas-opt kernel.S -o kernel.opt.S --viz kernel.html
 ```
 
 The [RTL extraction plan](.agents/notes/RTL_GRAPH_PLAN.md) and
-[evidence guides](docs/rtlgraph-mixed-dma.md) describe the optional
-`EE290SimConfig` flow. It uses the enclosing Atlas checkout;
-`third_party/atlas-npu` is not a registered submodule. In a controlled
-fused-attention replay, composed scheduling reduced first-issue-to-completion
-time from **24,932 to 22,132 edges** with passing output checks. The guide
-separates the DMA and MXU profile effects and states the validation limits.
-The [assembly handoff](docs/rtlgraph-contract.md) bundles an emitter's `before.S`,
-profiles, resolved footprints, and compiler identity for reproducible scheduling.
+[profile guide](docs/rtlgraph-model.md) describe optional partial profiles for
+`EE290SimConfig`. Checked-in projections live under
+`profiles/EE290SimConfig/{mxu0,mxu1,dma,lsu}/`; unselected rules keep the built-in
+model. Controlled full-kernel replays pass the original output goldens, including
+fused attention at **24,932→22,132 completion edges** on MXU1. These are finite
+measurements with documented evidence limits. The
+[assembly handoff](docs/rtlgraph-contract.md) bundles an emitter's `before.S`,
+profiles, resolved footprints, and compiler identity for reproducible scheduling
+and a practical Merlin integration boundary.
 
 | Option | What it does |
 |---|---|
@@ -31,7 +32,6 @@ profiles, resolved footprints, and compiler identity for reproducible scheduling
 | `--check` | only simulate the input: cycle count and any broken timing rules |
 | `--dump-footprints FILE` | export the input's resolved accesses, holds, and dependencies without scheduling |
 | `--dma-timing model` | trust npu_model's DMA latency instead of staying valid for any latency |
-| `--schedule-priority critical\|input` | choose critical-path priority (default) or input order among ready, resource-legal instructions |
 | `--experimental-mxu1-profile FILE` | load the optional partial MXU1 timing/resource projection; other rules remain built in |
 | `--experimental-mxu0-profile FILE` | load the optional MXU0 accumulator-read projection; may compose with an MXU1 profile from the same hardware IR |
 | `--rtl-dma-profile FILE` | extend the model with RTL DMA capture, address, and explicit-completion rules; requires robust timing |
@@ -71,13 +71,14 @@ no host acknowledgment, buffer ownership, or IMEM-slot exit proof.
 `--check` checks modeled completion; optimization additionally requires explicit
 DMA waits on every path.
 
-The [native RTL DMA guide](docs/rtlgraph-dma-native.md) extends this same compiler
-integration to issue-captured DMA operands, scalar `DMA.CONFIG`, VMEM word pointers,
-and explicit completion lifetimes. The selected profile requires matching waits
-within each basic block and rejects pending DMA across block boundaries. It uses
-minimum issue spacing and reservations widened over waits for checking; compiler
-cycle counts remain estimates. The default model and existing MXU profiles remain
-available. No automatic wait-insertion pass is added. The [version-2 DRAM range projection](docs/rtlgraph-dram-ranges.md) additionally tracks captured configuration and 37-bit bus addresses, allowing provably disjoint transfers to overlap.
+The optional RTL DMA profile uses issue-captured operands and `DMA.CONFIG`, VMEM
+word pointers, configured 37-bit DRAM ranges, and explicit completion lifetimes.
+It requires matching waits within each basic block and rejects pending DMA across
+block boundaries. Minimum issue spacing and reservations widened over waits are
+checked; cycle estimates do not prove completion. Provably disjoint transfers may
+overlap. The default model remains available, and this feature adds no automatic
+wait-insertion pass. See the [profile guide](docs/rtlgraph-model.md) for the exact
+semantics and limitations.
 
 ## Layout
 
