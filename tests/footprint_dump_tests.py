@@ -67,6 +67,29 @@ class FootprintDumpTests(unittest.TestCase):
         self.assertEqual(next(h['capacity'] for h in f['holds'] if h['unit'] == 'MXU in-flight matmuls'), 2)
         self.assertEqual(changed['model']['source_ir_sha256'], 'a' * 64)
 
+    def test_lsu_profile_exports_selected_accesses_and_inherited_rules(self):
+        source = 'vload m0, 0(x0)\nvstore m0, 8(x0)\n'
+        baseline = self.run_query(source)
+        fields = dict(rows=32, row_step=1, operand_capture='issue', vload_read_age=1,
+                      vload_write_age=3, vload_first_free_age=35, vstore_read_age=1,
+                      vstore_write_age=3, vstore_first_free_age=35)
+        current = self.run_query(source, '--rtl-lsu-profile', self.profile('atlas-lsu-profile-v1', **fields))
+        self.assertFalse(baseline['model']['rtl_lsu'])
+        self.assertTrue(current['model']['rtl_lsu'])
+        self.assertEqual(baseline['blocks'], current['blocks'])
+        fields.update(vload_read_age=2, vload_write_age=5, vload_first_free_age=38)
+        changed = self.run_query(source, '--rtl-lsu-profile', self.profile('atlas-lsu-profile-v1', **fields))
+        self.assertEqual(changed['model']['vload_first_free_age'], 38)
+        self.assertIn('inherited', changed['semantics']['lsu_scope'])
+        f = changed['blocks'][0]['instructions'][0]['footprint']
+        self.assertEqual(next(a['age'] for a in f['accesses'] if a['resource'] == 'MReg'), 5)
+        self.assertEqual(next(a['age'] for a in f['accesses'] if a['resource'] == 'Vmem'), 2)
+        self.assertEqual(next(h['to'] for h in f['holds'] if h['unit'] == 'VLOAD path'), 37)
+        self.assertEqual(f['mreg_writes'], [0])
+        self.assertTrue(f['write_during_read'])
+        self.assertEqual(f['done_age'], 37)
+        self.assertTrue(any(e['distance'] == 38 for e in changed['blocks'][0]['edges']))
+
     def test_dma_ranges_and_lifetimes_are_preserved(self):
         source = ('addi x5, x0, 3\ndma.config.ch0 x5\nlui x1, 0x90000\n'
                   'lui x6, 0x20000\naddi x12, x0, 32\ndma.load.ch0 x6, x1, x12\n'

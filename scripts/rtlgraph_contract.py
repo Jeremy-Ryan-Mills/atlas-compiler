@@ -14,7 +14,7 @@ import subprocess
 SCHEMA = 'atlas.rtlgraph.contract.v1'
 CONFIG = 'EE290SimConfig'
 FLAGS = {'mxu0': '--experimental-mxu0-profile', 'mxu1': '--experimental-mxu1-profile',
-         'dma': '--rtl-dma-profile'}
+         'dma': '--rtl-dma-profile', 'lsu': '--rtl-lsu-profile'}
 MERLIN_REF = '81a585b857838baeba35bc55eab7db10525db7cb'
 MERLIN_URL = ('https://github.com/ucb-bar/merlin/blob/' + MERLIN_REF +
               '/examples/atlas/phase1/contracts/hwbringup_atlas_v0/schedule_contract.yaml')
@@ -90,9 +90,10 @@ def checked_profile(role, path, evidence):
     schemas = [f'atlas-{role}-profile-v1'] + (['atlas-dma-profile-v2'] if role == 'dma' else [])
     require(fields.get('schema') in schemas and fields.get('config') == CONFIG and
             report.get('config') == CONFIG, 'Unsupported profile schema or configuration')
-    if role == 'dma':
+    if role in ('dma', 'lsu'):
         version = fields['schema'].rsplit('-', 1)[1]
-        require(report.get('schema') == f'atlas.rtlgraph.dma-profile.{version}', 'Wrong DMA evidence schema')
+        require(report.get('schema') == f'atlas.rtlgraph.{role}-profile.{version}',
+                f'Wrong {role.upper()} evidence schema')
     else:
         require(report.get('kind') == f'atlas-partial-{role}-profile' and report.get('schema_version') == 1,
                 'Wrong MXU evidence schema')

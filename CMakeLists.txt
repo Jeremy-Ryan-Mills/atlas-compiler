@@ -41,6 +41,10 @@ add_executable(machine-profile-tests tests/machine_profile_tests.cpp)
 target_link_libraries(machine-profile-tests atlas)
 add_test(NAME machine-profile-tests COMMAND machine-profile-tests)
 
+add_executable(lsu-profile-tests tests/lsu_profile_tests.cpp)
+target_link_libraries(lsu-profile-tests atlas)
+add_test(NAME lsu-profile-tests COMMAND lsu-profile-tests)
+
 add_executable(schedule-priority-tests tests/schedule_priority_tests.cpp)
 target_link_libraries(schedule-priority-tests atlas)
 add_test(NAME schedule-priority-tests COMMAND schedule-priority-tests)
@@ -63,4 +67,6 @@ if(Python3_Interpreter_FOUND)
     ${CMAKE_SOURCE_DIR}/tests/footprint_dump_tests.py $<TARGET_FILE:atlas-opt>)
   add_test(NAME rtlgraph-contract-tests COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_SOURCE_DIR}/scripts/tests/test_rtlgraph_contract.py $<TARGET_FILE:atlas-opt>)
+  add_test(NAME rtlgraph-lsu-profile-tests COMMAND ${Python3_EXECUTABLE} -B
+    ${CMAKE_SOURCE_DIR}/scripts/tests/test_rtlgraph_lsu_profile.py)
 endif()

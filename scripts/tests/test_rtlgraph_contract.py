@@ -32,6 +32,23 @@ def mxu_profile(directory, *, role='mxu1', ir='a' * 64):
     return profile
 
 
+def lsu_profile(directory, *, ir='a' * 64, write_age=3):
+    directory.mkdir(parents=True)
+    overrides = dict(rows=32, row_step=1, operand_capture='issue',
+                     vload_read_age=1, vload_write_age=write_age, vload_first_free_age=write_age + 32,
+                     vstore_read_age=1, vstore_write_age=3, vstore_first_free_age=35)
+    report = dict(schema='atlas.rtlgraph.lsu-profile.v1', config='EE290SimConfig',
+                  inputs={'hardware_ir': {'path': '/external/hardware.mlir', 'sha256': ir}},
+                  compiler_overrides=overrides, limitations=['Synthetic test fixture, not RTL evidence.'])
+    evidence = directory / 'profile.json'
+    write_json(evidence, report)
+    profile = directory / 'atlas-lsu.profile'
+    fields = dict(schema='atlas-lsu-profile-v1', config='EE290SimConfig', source_ir_sha256=ir,
+                  evidence_sha256=identity(evidence)['sha256'], **overrides)
+    profile.write_text(''.join(f'{key}={value}\n' for key, value in fields.items()))
+    return profile
+
+
 class ContractTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -78,6 +95,35 @@ class ContractTests(unittest.TestCase):
         (self.root / 'link').symlink_to('/tmp')
         with self.assertRaisesRegex(ValueError, 'symlink escapes'):
             checked_file(dict(record, path='link/not-needed'), self.root)
+
+    def test_lsu_projection_and_target_must_match_evidence(self):
+        profile = lsu_profile(self.root / 'lsu', ir='b' * 64)
+        self.assertEqual(checked_profile('lsu', profile, profile.with_name('profile.json'))['vload_write_age'], '3')
+        with self.assertRaisesRegex(ValueError, 'different hardware IR'):
+            export(self.root / 'absent.S', self.root / 'absent-compiler',
+                   {'mxu1': self.profile, 'lsu': profile}, self.root / 'bundle')
+        profile.write_text(profile.read_text().replace('vload_write_age=3', 'vload_write_age=4'))
+        with self.assertRaisesRegex(ValueError, 'settings differ'):
+            checked_profile('lsu', profile, profile.with_name('profile.json'))
+
+    @unittest.skipUnless(COMPILER, 'pass atlas-opt path for native integration')
+    def test_lsu_profile_drives_handoff_footprints_and_schedule(self):
+        before = self.root / 'source.S'
+        before.write_text('li x6, 536870912\nvload m0, 0(x6)\nvstore m0, 128(x6)\necall\n')
+        profile = lsu_profile(self.root / 'lsu', write_age=4)
+        bundle = self.root / 'bundle'
+        export(before, COMPILER, {'lsu': profile, 'mxu1': self.profile}, bundle)
+        dump = read_json(bundle / 'footprints.json')
+        load = next(insn for block in dump['blocks'] for insn in block['instructions'] if insn['opcode'] == 'vload')
+        writes = [access for access in load['footprint']['accesses'] if access['write']]
+        self.assertTrue(writes)
+        self.assertEqual({access['age'] for access in writes}, {4})
+        for priority in ('critical', 'input'):
+            result = schedule(bundle / 'contract.json', self.root / priority, priority)
+            self.assertIn('--rtl-lsu-profile', result['commands']['schedule'])
+            self.assertIn('--rtl-lsu-profile', result['commands']['check'])
+        saved = read_json(bundle / 'lsu' / 'profile.json')
+        self.assertEqual(saved['compiler_overrides']['vload_first_free_age'], 36)
 
     @unittest.skipUnless(COMPILER, 'pass atlas-opt path for native integration')
     def test_native_export_schedule_and_changed_artifact_rejection(self):

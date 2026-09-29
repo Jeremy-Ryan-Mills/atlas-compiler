@@ -79,10 +79,18 @@ std::string dumpFootprints(const AsmProgram& program, const MachineModel& model)
         << ",\"mxu1_first_write_age\":" << model.mxu1FirstWriteAge
         << ",\"mxu1_overwrite_acc_read_hold\":" << model.mxu1OverwriteAccReadHold
         << ",\"mxu0_overwrite_acc_read_hold\":" << model.mxu0OverwriteAccReadHold
-        << ",\"rtl_dma\":" << model.rtlDma << ",\"rtl_dma_ranges\":" << model.rtlDmaRanges << "},"
+        << ",\"rtl_dma\":" << model.rtlDma << ",\"rtl_dma_ranges\":" << model.rtlDmaRanges
+        << ",\"rtl_lsu\":" << model.rtlLsu
+        << ",\"vload_read_age\":" << model.vloadReadAge << ",\"vload_write_age\":" << model.vloadWriteAge
+        << ",\"vload_first_free_age\":" << model.vloadFirstFreeAge
+        << ",\"vstore_read_age\":" << model.vstoreReadAge << ",\"vstore_write_age\":" << model.vstoreWriteAge
+        << ",\"vstore_first_free_age\":" << model.vstoreFirstFreeAge << "},"
         << "\"semantics\":{\"age_origin\":\"instruction issue\",\"hold_end\":\"inclusive\","
         << "\"entry_state\":\"blockEntryValues: zero scalar registers at program entry, joined CFG values thereafter\","
-        << "\"unknown_value\":null,\"at_completion\":"
+        << "\"unknown_value\":null,\"lsu_scope\":"
+        << quote(model.rtlLsu ? "derived VLOAD/VSTORE access and physical hold timing; logical MREG reservation and visibility rules inherited"
+                             : "inherited VLOAD/VSTORE timing and rules")
+        << ",\"at_completion\":"
         << quote(model.rtlDma ? "memory lifetime until explicit matching DMA.WAIT; age is not a bound"
                               : "access at modeled DMA completion")
         << ",\"dma_cycles\":\"cost estimate, not a completion guarantee\","

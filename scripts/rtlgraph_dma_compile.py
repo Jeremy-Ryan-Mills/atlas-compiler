@@ -194,7 +194,15 @@ def same_operations(source, candidate, assembler):
 
 
 def prepare(source_path, assembler_path, compiler_path, profile_path, output, *, relocate_perf_markers=False,
-            mxu0_profile=None, mxu1_profile=None):
+            mxu0_profile=None, mxu1_profile=None, lsu_profile=None):
+    if lsu_profile is not None:
+        from rtlgraph_contract import checked_profile
+        selected = [('dma', profile_path), ('lsu', lsu_profile),
+                    *[(f'mxu{engine}', path) for engine, path in ((0, mxu0_profile), (1, mxu1_profile))
+                      if path is not None]]
+        hashes = {checked_profile(role, path, path.with_name('profile.json'))['source_ir_sha256']
+                  for role, path in selected}
+        require(len(hashes) == 1, 'Cannot combine profiles from different hardware IR')
     source, assembler = read_text(source_path), load_assembler(assembler_path)
     require(active(source)[-1].upper() == 'ECALL' and
             sum(tokens(line)[0].upper() == 'ECALL' for line in active(source)) == 1,
@@ -211,6 +219,8 @@ def prepare(source_path, assembler_path, compiler_path, profile_path, output, *,
     prepared.write_text(native)
     profiles = [(f'mxu{engine}_profile', f'--experimental-mxu{engine}-profile', path)
                 for engine, path in ((0, mxu0_profile), (1, mxu1_profile)) if path is not None]
+    if lsu_profile is not None:
+        profiles.append(('lsu_profile', '--rtl-lsu-profile', lsu_profile))
     model_flags = ['--rtl-dma-profile', str(profile_path)]
     for _, flag, path in profiles:
         model_flags += [flag, str(path)]
@@ -226,7 +236,7 @@ def prepare(source_path, assembler_path, compiler_path, profile_path, output, *,
                   scope='Native atlas-opt dependency and resource scheduling of the complete supported straight-line scalar/DMA/LSU/VPU/MXU stream; no handwritten ordering or unary-specific transformation.',
                   publication='All DBG0 CSR accesses conservatively receive atlas.release; explicit source release metadata on other CSRs is preserved.',
                   limitations=['Explicit waits are preserved; no automatic wait insertion.',
-                               'Local LSU/VPU and non-overridden MXU timing remain inherited; no fixed DMA completion bound.',
+                               'Unselected unit timing and logical reservation policies remain inherited; no fixed DMA completion bound.',
                                'Native model legality and encoded operation preservation require independent RTL/golden validation.'],
                   cases={})
     report['inputs'].update({name: artifact(path) for name, _, path in profiles})
@@ -280,11 +290,14 @@ def main():
     for engine in (0, 1):
         parser.add_argument(f'--mxu{engine}-profile', type=Path,
                             help=f'Compose an existing partial MXU{engine} profile with the DMA model')
+    parser.add_argument('--lsu-profile', type=Path,
+                        help='Compose a derived LSU row-access and path-occupancy profile with the DMA model')
     args = parser.parse_args()
     report = prepare(*(getattr(args, flag).resolve() for flag in ('source', 'assembler', 'atlas_opt', 'profile', 'output')),
                      relocate_perf_markers=args.relocate_perf_markers,
                      mxu0_profile=args.mxu0_profile.resolve() if args.mxu0_profile else None,
-                     mxu1_profile=args.mxu1_profile.resolve() if args.mxu1_profile else None)
+                     mxu1_profile=args.mxu1_profile.resolve() if args.mxu1_profile else None,
+                     lsu_profile=args.lsu_profile.resolve() if args.lsu_profile else None)
     print(json.dumps({name: item['word_count'] for name, item in report['cases'].items()}))
 
 

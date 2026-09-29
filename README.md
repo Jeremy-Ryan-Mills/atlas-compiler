@@ -35,6 +35,7 @@ profiles, resolved footprints, and compiler identity for reproducible scheduling
 | `--experimental-mxu1-profile FILE` | load the optional partial MXU1 timing/resource projection; other rules remain built in |
 | `--experimental-mxu0-profile FILE` | load the optional MXU0 accumulator-read projection; may compose with an MXU1 profile from the same hardware IR |
 | `--rtl-dma-profile FILE` | extend the model with RTL DMA capture, address, and explicit-completion rules; requires robust timing |
+| `--rtl-lsu-profile FILE` | load derived `VLOAD`/`VSTORE` access and path timing from the same hardware IR as other selected profiles |
 
 After optimizing, atlas-opt simulates the result (at npu_model's DMA speed and with
 slower DMA) and exits with an error if any timing rule is broken. The viewer shows

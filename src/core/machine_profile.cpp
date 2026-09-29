@@ -129,3 +129,74 @@ MachineModel readExperimentalDmaProfile(const std::string& path, const MachineMo
         std::string("DMA evidence ") + fields.at("evidence_sha256");
     return model;
 }
+
+MachineModel readExperimentalLsuProfile(const std::string& path, const MachineModel& base) {
+    std::ifstream stream(path);
+    auto fail = [&](const std::string& why) { return std::runtime_error("LSU profile " + path + ": " + why); };
+    if (!stream) throw fail("cannot read file");
+    std::map<std::string, std::string> fields;
+    auto trim = [](const std::string& text) {
+        size_t first = text.find_first_not_of(" \t\r\n");
+        return first == std::string::npos ? std::string{} : text.substr(first, text.find_last_not_of(" \t\r\n") - first + 1);
+    };
+    for (std::string line; std::getline(stream, line);) {
+        line = trim(line.substr(0, line.find('#')));
+        if (line.empty()) continue;
+        size_t eq = line.find('=');
+        if (eq == std::string::npos) throw fail("expected key=value");
+        if (!fields.emplace(trim(line.substr(0, eq)), trim(line.substr(eq + 1))).second)
+            throw fail("duplicate field " + trim(line.substr(0, eq)));
+    }
+    if (!stream.eof()) throw fail("read failed");
+    const std::map<std::string, std::string> supported = {
+        {"schema", "atlas-lsu-profile-v1"}, {"config", "EE290SimConfig"},
+        {"rows", "32"}, {"row_step", "1"}, {"operand_capture", "issue"},
+    };
+    for (const auto& [key, expected] : supported) {
+        auto found = fields.find(key);
+        if (found == fields.end()) throw fail("missing field " + key);
+        if (found->second != expected) throw fail("unsupported " + key + "=" + found->second);
+    }
+    for (const char* key : {"source_ir_sha256", "evidence_sha256"}) {
+        auto found = fields.find(key);
+        if (found == fields.end()) throw fail(std::string("missing field ") + key);
+        const std::string& hash = found->second;
+        if (hash.size() != 64 || !std::all_of(hash.begin(), hash.end(), [](char c) {
+            return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+        })) throw fail(std::string("invalid SHA-256 identity in ") + key);
+    }
+    auto age = [&](const std::string& key, int maximum) {
+        auto found = fields.find(key);
+        if (found == fields.end()) throw fail("missing field " + key);
+        const std::string& value = found->second;
+        if (value.empty() || value.size() > 3 ||
+            !std::all_of(value.begin(), value.end(), [](char c) { return c >= '0' && c <= '9'; }))
+            throw fail("invalid " + key);
+        int result = std::stoi(value);
+        if (result < 1 || result > maximum) throw fail(key + " outside supported range 1.." + std::to_string(maximum));
+        return result;
+    };
+    MachineModel model = base;
+    model.vloadReadAge = age("vload_read_age", 64);
+    model.vloadWriteAge = age("vload_write_age", 64);
+    model.vloadFirstFreeAge = age("vload_first_free_age", 128);
+    model.vstoreReadAge = age("vstore_read_age", 64);
+    model.vstoreWriteAge = age("vstore_write_age", 64);
+    model.vstoreFirstFreeAge = age("vstore_first_free_age", 128);
+    if (fields.size() != supported.size() + 8) throw fail("unknown fields");
+    for (bool load : {true, false}) {
+        int read = load ? model.vloadReadAge : model.vstoreReadAge;
+        int write = load ? model.vloadWriteAge : model.vstoreWriteAge;
+        int free = load ? model.vloadFirstFreeAge : model.vstoreFirstFreeAge;
+        if (write <= read || free <= write + 31)
+            throw fail(std::string(load ? "vload" : "vstore") + " write must follow read and first_free must follow the last write");
+    }
+    if (!base.sourceIrSha256.empty() && base.sourceIrSha256 != fields.at("source_ir_sha256"))
+        throw fail("cannot combine profiles from different hardware IR");
+    model.rtlLsu = true;
+    // Identities name evidence; loading a profile does not certify its claims.
+    model.sourceIrSha256 = fields.at("source_ir_sha256");
+    model.name = (base.sourceIrSha256.empty() ? "EE290SimConfig/" : base.name + "; ") +
+        std::string("LSU evidence ") + fields.at("evidence_sha256");
+    return model;
+}

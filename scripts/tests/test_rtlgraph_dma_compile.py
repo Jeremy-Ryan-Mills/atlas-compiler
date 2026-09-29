@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Adversarial assembly and benchmark-boundary checks for native DMA scheduling."""
 from pathlib import Path
+import json
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from rtlgraph_dma_compile import active, extract_markers, insert_markers, prepare, same_operations, translate
 from rtlgraph_kernel import KernelError
+from rtlgraph_s0 import artifact
 from test_rtlgraph_attention import TokenAssembler
 
 
@@ -117,6 +119,42 @@ class NativeDmaAdapterTests(unittest.TestCase):
         restored = translate(text, to_compiler=False)
         self.assertIn('DMA.LOAD x6, x1, x12, 7', restored)
         self.assertIn('DMA.CONFIG x5, 3', restored)
+
+    def test_lsu_profile_is_checked_and_used_by_scheduler_and_final_check(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / 'source.S'
+            source.write_text('VLOAD 0, x6, 0\nECALL\n')
+            profiles = {}
+            for role in ('dma', 'lsu'):
+                directory = root / role
+                directory.mkdir()
+                evidence = directory / 'profile.json'
+                evidence.write_text(json.dumps(dict(schema=f'atlas.rtlgraph.{role}-profile.v1',
+                    config='EE290SimConfig', compiler_overrides={}, inputs=dict(hardware_ir=dict(sha256='a' * 64)))))
+                profile = directory / f'atlas-{role}.profile'
+                profile.write_text(f'schema=atlas-{role}-profile-v1\nconfig=EE290SimConfig\n'
+                                   f'source_ir_sha256={"a" * 64}\nevidence_sha256={artifact(evidence)["sha256"]}\n')
+                profiles[role] = profile
+
+            def run(command, **_):
+                if '-o' in command:
+                    Path(command[command.index('-o') + 1]).write_text(Path(command[1]).read_text())
+                return SimpleNamespace(returncode=0, stdout='', stderr='')
+
+            with patch('rtlgraph_dma_compile.load_assembler', return_value=TokenAssembler()), \
+                    patch('rtlgraph_dma_compile.subprocess.run', side_effect=run):
+                report = prepare(source, source, source, profiles['dma'], root / 'output', lsu_profile=profiles['lsu'])
+            self.assertEqual(report['inputs']['lsu_profile'], artifact(profiles['lsu']))
+            for case in report['cases'].values():
+                for field in ('command', 'final_check_command'):
+                    command = case[field]
+                    self.assertEqual(command[command.index('--rtl-lsu-profile') + 1], str(profiles['lsu']))
+            profile = profiles['lsu']
+            profile.write_text(profile.read_text() + 'vload_write_age=4\n')
+            with self.assertRaisesRegex(ValueError, 'settings differ'):
+                prepare(source, source, source, profiles['dma'], root / 'invalid', lsu_profile=profile)
+            self.assertFalse((root / 'invalid').exists())
 
     def test_marker_relocation_is_independent_of_register_and_dma_layout(self):
         body, markers = extract_markers(SOURCE)

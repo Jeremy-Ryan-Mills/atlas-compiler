@@ -216,21 +216,25 @@ Footprint footprintOf(const Instr& in, const RegValues& regs, const MachineModel
             if (addr && (*addr % 1024 != 0 || *addr / kVmemBankBytes != (*addr + 1023) / kVmemBankBytes))
                 b.f.error = "vload/vstore address must be 1 KiB aligned inside one VMEM bank";
             b.x(in.rs1, false, 0);
+            int readAge = load ? model.vloadReadAge : model.vstoreReadAge;
+            int writeAge = load ? model.vloadWriteAge : model.vstoreWriteAge;
+            int lastHeldAge = (load ? model.vloadFirstFreeAge : model.vstoreFirstFreeAge) - 1;
+            // Logical MREG reservation and same-cycle rules remain inherited.
             if (load) {
-                b.vmem(addr, 1024, false, 1, 1);  // VMEM row r read at age 1+r
-                b.mrows(in.rd, true, 3);          // register row r written at age 3+r
+                b.vmem(addr, 1024, false, readAge, 1);
+                b.mrows(in.rd, true, writeAge);
                 b.f.mregWrites = {in.rd};
-                b.f.writeRelease = 34;
+                b.f.writeRelease = lastHeldAge;
                 b.f.writeDuringRead = true;
-                b.hold(Unit::VloadPath, 0, 0, 34);
-                b.bankHold(addr, 1, 32);
+                b.hold(Unit::VloadPath, 0, 0, lastHeldAge);
+                b.bankHold(addr, readAge, readAge + 31);
             } else {
-                b.mrows(in.rd, false, 1);
-                b.vmem(addr, 1024, true, 3, 1);
+                b.mrows(in.rd, false, readAge);
+                b.vmem(addr, 1024, true, writeAge, 1);
                 b.f.mregReads = {in.rd};
-                b.f.readRelease = b.f.writeRelease = 34;
-                b.hold(Unit::VstorePath, 0, 0, 34);
-                b.bankHold(addr, 3, 34);
+                b.f.readRelease = b.f.writeRelease = lastHeldAge;
+                b.hold(Unit::VstorePath, 0, 0, lastHeldAge);
+                b.bankHold(addr, writeAge, writeAge + 31);
             }
             break;
         }

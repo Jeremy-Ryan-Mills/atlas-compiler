@@ -38,7 +38,7 @@
     "profiles": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 3,
+      "maxItems": 4,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -52,7 +52,8 @@
             "enum": [
               "mxu0",
               "mxu1",
-              "dma"
+              "dma",
+              "lsu"
             ]
           },
           "projection": {

@@ -87,6 +87,21 @@ def audit_native(static, selected):
             verify_artifact(record)
         model_flags.extend([f'--experimental-mxu{engine}-profile', str(extra)])
         mxu_profiles[key] = dict(projection=artifact(extra), canonical=artifact(evidence_path))
+    lsu_profile = None
+    if 'lsu_profile' in static['inputs']:
+        from rtlgraph_contract import checked_profile
+        extra = verify_artifact(static['inputs']['lsu_profile'])
+        evidence_path = extra.with_name('profile.json')
+        fields = checked_profile('lsu', extra, evidence_path)
+        require(fields['source_ir_sha256'] == settings['source_ir_sha256'],
+                'Native LSU and DMA hardware IR differ')
+        evidence = json.loads(evidence_path.read_text())
+        for record in evidence['inputs'].values():
+            verify_artifact(record)
+        for record in evidence.get('analysis_dependencies', {}).values():
+            verify_artifact(record)
+        model_flags.extend(['--rtl-lsu-profile', str(extra)])
+        lsu_profile = dict(projection=artifact(extra), canonical=artifact(evidence_path))
     native_input = verify_artifact(static['native_input'])
     source = verify_artifact(static['inputs']['source']).read_text()
     markers = None
@@ -124,6 +139,8 @@ def audit_native(static, selected):
                   compiler=static['inputs']['compiler'], exact_final_native_checks_repeated=True)
     if mxu_profiles:
         result['mxu_profiles'] = mxu_profiles
+    if lsu_profile:
+        result['lsu_profile'] = lsu_profile
     return result
 
 

@@ -205,6 +205,37 @@ class DmaCompareTests(unittest.TestCase):
         self.assertEqual(set(result['comparisons']['native_critical']), {'original'})
         self.assertEqual(result['comparisons']['native_critical']['original']['first_issue_to_dbg0_edges']['edges_saved'], 150)
 
+    def test_lsu_profile_is_bound_to_native_check_and_common_hardware(self):
+        case = self.native_fixture(version=2)
+        directory = self.root / 'lsu'
+        directory.mkdir()
+        hardware = artifact(self.root / 'hardware.mlir')
+        evidence = directory / 'profile.json'
+        evidence.write_text(json.dumps(dict(schema='atlas.rtlgraph.lsu-profile.v1', config='EE290SimConfig',
+            inputs=dict(hardware_ir=hardware), compiler_overrides=dict(vload_read_age=1))))
+        profile = directory / 'atlas-lsu.profile'
+        profile.write_text('schema=atlas-lsu-profile-v1\nconfig=EE290SimConfig\n'
+                           f'source_ir_sha256={hardware["sha256"]}\nevidence_sha256={artifact(evidence)["sha256"]}\n'
+                           'vload_read_age=1\n')
+        self.record['inputs']['lsu_profile'] = artifact(profile)
+        case['command'][-2:-2] = ['--rtl-lsu-profile', str(profile)]
+        case['final_check_command'] += ['--rtl-lsu-profile', str(profile)]
+        self.save_static()
+        with patch('rtlgraph_dma_compare.subprocess.run') as check:
+            check.return_value.returncode = 0
+            result = self.compare_native()
+        self.assertIn('--rtl-lsu-profile', check.call_args.args[0])
+        self.assertEqual(result['native_compiler_audit']['lsu_profile']['projection'], artifact(profile))
+        case['final_check_command'] = case['final_check_command'][:-2]
+        self.save_static()
+        with self.assertRaisesRegex(ValueError, 'check command differs'):
+            self.compare_native()
+        profile.write_text(profile.read_text().replace('vload_read_age=1', 'vload_read_age=2'))
+        self.record['inputs']['lsu_profile'] = artifact(profile)
+        self.save_static()
+        with self.assertRaisesRegex(ValueError, 'settings differ'):
+            self.compare_native()
+
     def test_native_profile_and_canonical_versions_must_match(self):
         self.native_fixture(version=2)
         canonical = self.root / 'profile.json'

@@ -23,6 +23,9 @@ struct MachineModel {
     bool mxu0OverwriteAccReadHold = true;
     bool rtlDma = false;  // issue-captured commands and explicit completion lifetimes
     bool rtlDmaRanges = false;  // v2 profile: configured, projected DRAM byte ranges
+    bool rtlLsu = false;
+    int vloadReadAge = 1, vloadWriteAge = 3, vloadFirstFreeAge = 35;
+    int vstoreReadAge = 1, vstoreWriteAge = 3, vstoreFirstFreeAge = 35;
     std::string sourceIrSha256;
     std::string name = "npu_model/rtl-match";
 };
@@ -30,6 +33,7 @@ struct MachineModel {
 MachineModel readExperimentalMxu1Profile(const std::string& path, const MachineModel& base = {});
 MachineModel readExperimentalMxu0Profile(const std::string& path, const MachineModel& base = {});
 MachineModel readExperimentalDmaProfile(const std::string& path, const MachineModel& base = {});
+MachineModel readExperimentalLsuProfile(const std::string& path, const MachineModel& base = {});
 
 // Storage an instruction reads or writes.
 enum class Res { XReg, EReg, MReg, Acc, Weight, Vmem, DmaBase, Dram };

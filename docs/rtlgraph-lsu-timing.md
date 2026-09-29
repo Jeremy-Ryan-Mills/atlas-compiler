@@ -1,6 +1,6 @@
 # Conditional LSU timing from CIRCT
 
-The [timing query](../scripts/rtlgraph_lsu_timing.py#L138-L161) derives the `EE290SimConfig` LSU request stream from typed state/counter transitions. With a one-cycle source-memory response contract, it also derives the existing write and release ages. The response query below establishes that contract under explicit physical-bank exclusions. Neither introduces a compiler timing override or a new VPU latency claim.
+The [timing query](../scripts/rtlgraph_lsu_timing.py#L138-L161) derives the `EE290SimConfig` LSU request stream from typed state/counter transitions. The response and routing queries connect that stream to memory accesses under explicit physical-bank exclusions. An optional compiler profile now consumes the derived vector access and path timing; scalar LSU and VPU timing remain inherited.
 
 The evidence report (`build/rtlgraph-mixed-dma/timing/local-1/lsu-timing.json`) retains the hardware IR hash, typed artifact, source locations, checked cones, exact assumptions, and bounded trajectory. Its input is the prior LSU local evidence (`build/rtlgraph-lsu/local-2/lsu.json`), which is freshly rechecked rather than accepted by its status string. Existing extractors and historical evidence remain unchanged.
 
@@ -47,9 +47,25 @@ These laws discharge the previous response-valid timing assumption under the sta
 
 The result strengthens the previous [local LSU checks and finite waveform observations](rtlgraph-lsu.md#typed-circt-checks). It supports the existing numerical profile under explicit assumptions. It is a deterministic bounded evaluation of extracted recurrences, **not a `circt-bmc` run or an unbounded whole-RTL proof**.
 
-The transfer begins with idle state and empty LSU and memory-response stages; reset remains low and no second command is issued on the same path during the interval. Addresses must be aligned, in range, nonwrapping, and free of physical conflicts. Neither query proves payload correctness, complete row/address routing, scalar decoding or issue legality, or whole-kernel scheduling safety. Existing wrapper identity checks bind the LSU command interface to the scalar LSU-command output; previous traces provide finite instruction-to-command correspondence.
+The transfer begins with idle state and empty LSU and memory-response stages; reset remains low and no second command is issued on the same path during the interval. Addresses must be aligned, in range, nonwrapping, and free of physical conflicts. The timing and response queries alone do not prove payload routing or write acceptance; the routing query below checks those paths. Scalar decoding, issue legality, same-row read/write visibility, and whole-kernel safety remain outside this proof. Existing wrapper identity checks bind the LSU command interface to the scalar LSU-command output; previous traces provide finite instruction-to-command correspondence.
 
-The next evidence step is selected row/payload routing and destination-write acceptance, followed by checking the physical exclusion conditions over complete schedules. This remains conditional timing evidence, not a universal fixed-latency proof.
+## Row routing and write acceptance
+
+The [routing query](../scripts/rtlgraph_lsu_routing.py#L124-L234) checks command operand capture, physical row/address selection, response payload selection, LSU data registers, and destination SRAM write ports. Symbolic bit identities cover every payload value through the selected paths. The proof assumes the storage semantics of the checked `seq.firmem` operations. Fresh evidence is retained in `build/rtlgraph-lsu-routing/local-1/lsu-routing.json`.
+
+For each VMEM bank it checks all 16 allowed lower-priority request combinations during a vector read and all 64 during a vector write, including DMA/TileLink interference. A vector write must enable the full 32-byte mask. MREG accesses require the LSU to be the sole reader or writer of the corresponding physical bank. The derived one-hot request/response selection connects the selected bank's payload to the row pipeline. These conditional facts do not prove that an arbitrary kernel satisfies the exclusions.
+
+## Compiler consumption
+
+[`rtlgraph_lsu_profile.py`](../scripts/rtlgraph_lsu_profile.py#L15-L103) reruns the typed analysis and emits `atlas-lsu-profile-v1` with canonical evidence. `atlas-opt --rtl-lsu-profile FILE` uses its ages for `VLOAD`/`VSTORE` row accesses, VMEM bank holds, and load/store path occupancy. Profiles compose only when they identify the same hardware IR. The derived profile and its evidence are in `build/rtlgraph-lsu-profile/profile-1`.
+
+The current projection has read age 1, write age 3, 32 rows with unit stride, and first-free age 35. Thus the path hold ends at **34 inclusive**, not 35. Logical MREG reservation policy and same-cycle visibility remain inherited; reservation release follows the selected path lifetime. Unknown VMEM addresses retain conservative all-bank holds and require legal aligned runtime addresses.
+
+The [Merlin-facing assembly handoff](rtlgraph-contract.md#merlin-comparison) accepts `--lsu-profile` and preserves these facts, their assumptions, and operand-resolved native footprints. An emitter supplies operations and buffer assignments; `atlas-opt` consumes the timing and checks the resulting schedule. A scalar completion latency would lose row-stream overlap and bank/path occupancy.
+
+The sensitivity test adds a one-cycle busy tail to a typed-IR fixture: analysis derives first-free age 36 instead of 35, the native hold extends by one cycle, and the second independent `VLOAD` moves from cycle 35 to 36. The checker rejects the old spacing under the changed profile. `build/rtlgraph-lsu-profile/sensitivity-2/results.json` binds the analysis, compiler, profiles, and schedules. This is a controlled typed-IR test, not a modified-RTL build or performance result.
+
+Fresh RTL replays with DMA, MXU0, MXU1, and LSU profiles passed all 1,536 unary and 1,024 MXU0 K64 output words. Completion remained 9,083 and 11,941 edges respectively, compared with handwritten baselines of 10,181 and 12,189. Both emitted assemblies match the previously optimized candidates byte-for-byte; selecting the LSU profile preserves those improvements without adding another speedup. `build/rtlgraph-lsu-profile/validation-1.json` binds the evidence, sensitivity test, four-profile handoff, compiler checks, and replay comparisons. The cached simulator's source-to-binary linkage remains unverified.
 
 ## Reproduce
 
@@ -69,6 +85,22 @@ python3 -B scripts/rtlgraph_lsu_response.py \
 
 python3 -B scripts/tests/test_rtlgraph_lsu_response.py \
   build/rtlgraph-lsu-response/local-NEW/typed.json
+
+python3 -B scripts/rtlgraph_lsu_routing.py \
+  --lsu-evidence build/rtlgraph-lsu/local-2/lsu.json \
+  --output build/rtlgraph-lsu-routing/local-NEW
+
+python3 -B scripts/rtlgraph_lsu_profile.py \
+  --lsu-evidence build/rtlgraph-lsu-routing/local-NEW/lsu-routing.json \
+  --output build/rtlgraph-lsu-profile/profile-NEW
+
+python3 -B scripts/tests/test_rtlgraph_lsu_routing.py \
+  build/rtlgraph-lsu-routing/local-NEW/typed.json
+
+python3 -B scripts/tests/test_rtlgraph_lsu_profile_integration.py \
+  build/rtlgraph-lsu-routing/local-NEW/typed.json \
+  build/rtlgraph-lsu-profile/compiler-1/atlas-opt \
+  --output build/rtlgraph-lsu-profile/sensitivity-NEW
 ```
 
-The 19 timing tests reject changed counters, reset/clock behavior, row capture, progression, and pending stages. The 16 response tests cover changed memory latency, bank decode, arbitration, mode/enables, response routing, clock wiring, unsupported attributes, and incomplete input domains. Positive tests compare derived ages with the existing profile; those comparisons are outside the extractor.
+The 19 timing tests reject changed counters, reset/clock behavior, row capture, progression, and pending stages. The 16 response tests cover changed memory latency, bank decode, arbitration, mode/enables, response routing, clock wiring, unsupported attributes, and incomplete input domains. The 16 routing tests cover operand capture, address/payload wiring, write masks, ports, and the controlled busy tail. Positive tests compare derived ages with the existing profile; those comparisons are outside the extractor.
