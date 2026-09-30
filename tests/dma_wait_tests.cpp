@@ -50,6 +50,7 @@ int find(const Code& code, OpClass op, int rd = -1) {
 }
 
 void simulateSafe(const Code& code, const MachineModel& model) {
+    checkStaticSchedule(flatten(code), model);
     for (double scale : {0.001, 1.0, 100.0}) {
         SimOptions options;
         options.model = model;
@@ -112,6 +113,15 @@ int main() {
         const auto view = buildProgramView("DMA join", parseAsm(joined), code, {}, {}, model);
         check(renderHtml(view).find("Dependency edges unavailable") != std::string::npos,
               "viewer represented an invalid pre-insertion graph as validated");
+
+        // Real perf kernels publish success in a successor block after their final store.
+        code = optimize(setup + "dma.store.ch0 x1, x4, x2\npass:\naddi x9, x0, 1\n"
+            "csrrw x0, x9, 0xC10 # atlas.release\necall\n", model);
+        const auto& completion = code.blocks.back().body;
+        check(completion.size() >= 3 && completion[0].op->name == "addi" &&
+              completion[1].op->opClass == OpClass::DmaWait && completion[2].release,
+              "incoming DMA unnecessarily guards the independent publication value");
+        simulateSafe(code, model);
 
         // A loop needs a wait on the backedge reuse as well as at final completion.
         code = optimize(setup + "addi x8, x0, 3\nloop:\ndma.load.ch0 x4, x1, x2\n"
@@ -180,6 +190,31 @@ int main() {
 
         rejects(setup + "jal x0, end\ndma.load.ch0 x4, x1, x2\nend:\necall\n", "delay slots");
         rejects(setup + "jalr x0, 0(x1)\nnop\n", "jalr");
+
+        // Numerical load values are unknown, but both branch paths have timing obligations.
+        const std::string dataBranch = setup + "lhu x10, 0(x4)\nbne x10, x0, other\nnop\n"
+            "vadd.bf16 m8, m0, m2\njal x0, end\nnop\nother:\nvsub.bf16 m8, m0, m2\nend:\necall\n";
+        const auto dataSchedule = flatten(optimize(dataBranch, model));
+        check(!simulate(dataSchedule, SimOptions{.model = model}).stopReason.empty(), "dynamic checker unexpectedly knows payload");
+        checkStaticSchedule(dataSchedule, model);
+        auto rejectsStatic = [&](const std::string& source, const std::string& reason) {
+            try { checkStaticSchedule(parseAsm(source), model); }
+            catch (const std::runtime_error& error) {
+                check(std::string(error.what()).find(reason) != std::string::npos,
+                      "unexpected static rejection: " + std::string(error.what()));
+                return;
+            }
+            throw std::runtime_error("static checker accepted " + reason);
+        };
+        rejectsStatic("beq x0, x0, end\nnop\nvadd.bf16 m8, m0, m2\n"
+                      "vsub.bf16 m10, m8, m2\ndelay 100\nnop\nend:\necall\n", "insufficient issue distance");
+        rejectsStatic("vadd.bf16 m8, m0, m2\nnext:\necall\n", "block boundary");
+        rejectsStatic("vadd.bf16 m8, m0, m2\ndelay 100\necall\n", "halt bypasses");
+        rejectsStatic("jalr x0, x1, 0\nnop\n", "known CFG targets");
+        rejectsStatic("jal x0, end\nend:\n", "explicit branch delay slot");
+        rejectsStatic("jal x0, end\ncsrrw x0, x0, 0xC10 # atlas.release\nend:\necall\n", "delay slot");
+        rejectsStatic(setup + "dma.load.ch0 x4, x1, x2\nbeq x0, x0, end\nnop\n"
+                      "dma.wait.ch0\nend:\necall\n", "DMA");
         std::cout << "PASS: " << checks << " selected-model DMA wait and CFG checks\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

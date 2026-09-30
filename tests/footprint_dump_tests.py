@@ -1,4 +1,4 @@
-"""Exercise the native model export through its JSON CLI boundary."""
+"""Exercise native model export and validation through the CLI boundary."""
 import json
 from pathlib import Path
 import subprocess
@@ -164,10 +164,27 @@ class FootprintDumpTests(unittest.TestCase):
         self.run_query('dma.load.ch0 x6, x1, x12\necall\n',
                        '--rtl-dma-profile', self.dma_profile(), success=False)
         for flags in (['--check'], ['--passes', 'schedule'], ['-o', str(self.root / 'after.S')],
-                      ['--viz', str(self.root / 'graph.html')]):
+                      ['--viz', str(self.root / 'graph.html')], ['--validation', 'static']):
             with self.subTest(flags=flags):
                 run = self.run_query('ecall\n', *flags, success=False)
                 self.assertEqual(run.returncode, 2)
+
+    def test_static_validation_handles_unknown_numerical_branches(self):
+        self.source.write_text('lui x1, 0x20000\nlhu x2, 0(x1)\nbne x2, x0, other\nnop\n'
+                               'vadd.bf16 m8, m0, m2\nother:\necall\n')
+        output = self.root / 'after.S'
+        scheduled = subprocess.run([str(COMPILER), str(self.source), '-o', str(output),
+                                    '--validation', 'static'], capture_output=True, text=True)
+        self.assertEqual(scheduled.returncode, 0, scheduled.stderr)
+        self.assertIn('numerical behavior and dynamic latency not evaluated', scheduled.stderr)
+        for mode, status in [('static', 0), ('dynamic', 1)]:
+            checked = subprocess.run([str(COMPILER), str(output), '--check', '--validation', mode],
+                                     capture_output=True, text=True)
+            self.assertEqual(checked.returncode, status, checked.stderr)
+        for flags in (['--dma-timing', 'model'], ['--viz', str(self.root / 'v.html')]):
+            rejected = subprocess.run([str(COMPILER), str(output), '--validation', 'static', *flags],
+                                      capture_output=True, text=True)
+            self.assertEqual(rejected.returncode, 2, rejected.stderr)
 
 
 if __name__ == '__main__':

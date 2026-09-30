@@ -17,7 +17,8 @@ static void usage() {
                  "  --list-passes      list the passes in the order they run\n"
                  "  --dma-timing MODE  robust (default): valid for any DMA latency;\n"
                  "                     model: trust npu_model's DMA latency\n"
-                 "  --check            only simulate the input and report problems\n"
+                 "  --check            only validate the input and report problems\n"
+                 "  --validation MODE  dynamic (default) or static: check all CFG blocks without numerical execution\n"
                  "  --dump-footprints FILE  only export resolved input footprints and dependencies\n"
                  "  --experimental-mxu1-profile FILE  use a partial RTL timing profile\n"
                  "  --experimental-mxu0-profile FILE  use a partial MXU0 resource profile\n"
@@ -44,7 +45,7 @@ int main(int argc, char** argv) {
     std::string input, output, vizPath, profilePath, mxu0ProfilePath, dmaProfilePath, lsuProfilePath, xluProfilePath, vpuProfilePath, dumpPath;
     std::vector<std::string> passNames;
     PassContext ctx;
-    bool checkOnly = false, quiet = false, requestedPasses = false;
+    bool checkOnly = false, quiet = false, requestedPasses = false, staticChecks = false;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         bool hasValue = i + 1 < argc;
@@ -61,6 +62,13 @@ int main(int argc, char** argv) {
             requestedPasses = true;
             std::stringstream list(argv[++i]);
             for (std::string name; std::getline(list, name, ',');) passNames.push_back(name);
+        } else if (a == "--validation" && hasValue) {
+            const std::string mode = argv[++i];
+            if (mode != "dynamic" && mode != "static") {
+                std::cerr << "atlas-opt: --validation requires dynamic or static\n";
+                return 2;
+            }
+            staticChecks = mode == "static";
         } else if (a == "--dma-timing" && hasValue) ctx.robustDma = std::string(argv[++i]) != "model";
         else if (a == "--list-passes") {
             for (const Pass& p : allPasses()) std::cout << p.name << "\t" << p.description << "\n";
@@ -79,6 +87,10 @@ int main(int argc, char** argv) {
     }
     if (!dumpPath.empty() && (checkOnly || requestedPasses || !output.empty() || !vizPath.empty())) {
         std::cerr << "atlas-opt: --dump-footprints cannot combine with --check, --passes, -o, or --viz\n";
+        return 2;
+    }
+    if (staticChecks && (!vizPath.empty() || !dumpPath.empty() || !ctx.robustDma)) {
+        std::cerr << "atlas-opt: static validation requires robust timing and cannot combine with --viz or --dump-footprints\n";
         return 2;
     }
 
@@ -100,6 +112,25 @@ int main(int argc, char** argv) {
         options.model = ctx.model;
         AsmProgram original = readAsmFile(input);
         if (!dumpPath.empty()) return writeFile(dumpPath, dumpFootprints(original, ctx.model)) ? 0 : 1;
+        if (staticChecks) {
+            AsmProgram checked = original;
+            if (!checkOnly) {
+                Code code = buildBlocks(original);
+                runPasses(code, passNames, ctx);
+                checked = flatten(code);
+            }
+            checkStaticSchedule(checked, ctx.model);
+            if (!checkOnly) {
+                if (!output.empty()) {
+                    if (!writeFile(output, printAsm(checked))) return 1;
+                } else std::cout << printAsm(checked);
+            }
+            if (!quiet) {
+                for (const auto& line : ctx.log) std::cerr << "  " << line << "\n";
+                std::cerr << input << ": static CFG hazard checks passed; numerical behavior and dynamic latency not evaluated\n";
+            }
+            return 0;
+        }
         SimResult before = simulate(original, options);
         if (checkOnly) {
             std::cout << input << ": " << before.cycles << " cycles, " << before.issued << " instructions issued ("

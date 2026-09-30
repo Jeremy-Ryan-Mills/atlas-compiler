@@ -7,6 +7,8 @@
 #include <map>
 
 #include "core/machine.h"
+#include "core/depgraph.h"
+#include "core/dma_flow.h"
 #include "core/reservations.h"
 #include "core/values.h"
 
@@ -285,4 +287,64 @@ SimResult simulate(const AsmProgram& prog, const SimOptions& opt) {
             violation(where(d.in) + ": program ends without explicit DMA.WAIT for this transfer");
     r.cycles = std::max(lastIssue, end);
     return r;
+}
+
+void checkStaticSchedule(const AsmProgram& prog, const MachineModel& model) {
+    for (size_t i = 0; i < prog.instrs.size(); ++i) {
+        const auto& in = prog.instrs[i];
+        if (in.op->engine == Engine::Dma && !model.rtlDma)
+            throw std::runtime_error("static DMA checks require an RTL DMA profile");
+        if (i && in.op->opClass == OpClass::Halt && prog.instrs[i - 1].op->opClass == OpClass::Delay &&
+            naturalGap(prog.instrs[i - 1]) > 1)
+            throw std::runtime_error(where(in) + ": halt bypasses preceding delay; insert a halt guard");
+    }
+    const Code code = buildBlocks(prog);
+    for (const auto& block : code.blocks)
+        if (block.unknownSuccs) throw std::runtime_error("static checks require known CFG targets");
+    const auto entries = blockEntryValues(code, model.rtlDmaRanges);
+    DmaFlow flow;
+    if (model.rtlDma) {
+        validateDmaFlow(code, model);
+        flow = analyzeDmaFlow(code, model);
+    }
+    for (size_t b = 0; b < code.blocks.size(); ++b) {
+        const Block& block = code.blocks[b];
+        if (hasDelaySlot(block) && !block.slot)
+            throw std::runtime_error("static checks require an explicit branch delay slot");
+        IncomingDma incoming;
+        if (model.rtlDma) incoming = {flow.before[b].front(), &flow.commands};
+        const auto nodes = blockInstructions(block);
+        const auto cycles = asWrittenCycles(nodes);
+        const auto graph = buildGraph(nodes, entries[b], 0, model, model.rtlDma ? &incoming : nullptr);
+        if (nodes.empty()) continue;
+        const int end = cycles.back() + naturalGap(nodes.back());
+        ReservationTable table;
+        for (size_t i = 0; i < nodes.size(); ++i) {
+            const auto& in = nodes[i];
+            const auto& footprint = graph.footprints[i];
+            auto fail = [&](const std::string& reason) {
+                throw std::runtime_error("block " + std::to_string(b) + ", " + where(in) + ": " + reason);
+            };
+            if (!footprint.error.empty()) fail(footprint.error);
+            const bool slot = hasDelaySlot(block) && i + 1 == nodes.size();
+            if (slot && (in.op->engine != Engine::Scalar || footprint.doneAge || in.release ||
+                         in.op->opClass == OpClass::Delay || in.op->opClass == OpClass::Halt || isControlFlow(*in.op)))
+                fail("static checks require a single-cycle scalar delay slot without publication");
+            for (int edge : graph.in[i]) {
+                const auto& dep = graph.edges[edge];
+                if (cycles[i] - cycles[dep.from] < dep.distance)
+                    fail("insufficient issue distance: " + dep.reason);
+            }
+            const auto conflict = table.conflict(in, footprint, cycles[i]);
+            if (!conflict.empty()) fail(conflict);
+            table.reserve(in, footprint, cycles[i]);
+            if (in.op->opClass == OpClass::DmaWait) table.extendForWait(cycles[i]);
+            // Every successor starts after all fixed work has retired. DMA
+            // lifetimes are instead checked over CFG joins and backedges above.
+            const int boundary = block.terminator && block.terminator->op->opClass == OpClass::Halt
+                                     ? cycles[block.body.size()] : end;
+            if (i < block.body.size() && cycles[i] + footprint.doneAge >= boundary)
+                fail("fixed-latency work must drain before the block boundary");
+        }
+    }
 }

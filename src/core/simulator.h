@@ -26,3 +26,7 @@ struct SimResult {
 // checks use minimum issue spacing and reservations widened over arbitrary waits.
 // Halt reports unfinished work. Legacy falloff drains; RTL DMA falloff requires waits.
 SimResult simulate(const AsmProgram& prog, const SimOptions& opt = {});
+
+// Conservative all-block hazard check with explicit boundary drains and known
+// CFG targets. Does not execute numerical values or estimate dynamic latency.
+void checkStaticSchedule(const AsmProgram& prog, const MachineModel& model = {});
