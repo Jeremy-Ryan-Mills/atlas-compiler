@@ -70,6 +70,19 @@ These defaults are not always the fastest known schedules. Restored `--schedule-
 
 Input priority also takes 4,830 edges for that layernorm case. At 128 words, the corresponding improvements are 54 and 15 edges. This is measured sensitivity to the launch environment, not a change between compiler versions: the previous and current combined-model streams are identical. Performance gains are conditional on the recorded execution; static resource timing does not establish a DRAM completion bound.
 
+The [layernorm phase audit](../profiles/EE290SimConfig/validation/layernorm-phases.json) locates the sign change in output DMA. It reuses the five existing manifests, accepted PC/word traces, and completion VCDs; no additional execution was needed. The intervals below sum exactly to first accepted instruction through `DBG0`. Input and output idle coincide with acceptance of their respective `DMA.WAIT` instructions in all five traces.
+
+| Capacity / stream | First issue → input DMA idle | Input idle → output DMA issue | Output DMA issue → output idle | Output idle → `DBG0` | Total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 64 / handwritten | 2,623 | 755 | 1,423 | 2 | 4,803 |
+| 64 / current default | 2,623 | 681 | 1,525 | 1 | 4,830 |
+| 128 / handwritten | 2,451 | 755 | 1,400 | 2 | 4,608 |
+| 128 / current default | 2,451 | 681 | 1,460 | 1 | 4,593 |
+
+The current schedule issues the vector constant fill during input DMA and moves scalar setup earlier. Its interval from input idle through vector work and stores to output DMA issue saves 74 edges at both capacities. Output DMA then takes 102 extra edges at capacity 64 or 60 extra edges at capacity 128; one fewer publication instruction produces the observed `-74 + 102 - 1 = +27` regression and `-74 + 60 - 1 = -15` improvement. The sampled output channel busy intervals confirm that the added delay occurs while DMA is active. Input priority has a distinct encoded stream but the same phase lengths as the default at capacity 64.
+
+This identifies the measured phase responsible for the reversal, without establishing its memory-system cause. These captures contain DMA busy flags and scalar issue events, but no memory request/response or DRAM-state events. Earlier output launch interacting with memory state is a possible explanation; the evidence cannot distinguish it from other causes of DMA service variation. The audit checks host source and ELF bytes outside the instruction array within each pair, shared launch edges, unchanged encoded streams across capacities for each variant, and replay artifact hashes. Host setup remains excluded from the metric, although its effects on the launch environment can persist.
+
 The [three supplemental probes](../profiles/EE290SimConfig/validation/perf-extra.json) cover the remaining corpus files with explicit full-output instrumentation. Their altered programs and fixtures are reported separately from the original eleven kernels.
 
 These are finite numerical and execution checks. The cached simulator's source-to-binary build linkage remains unverified. A fresh simulator build is deferred. The checked-in profile identities preserve the selected hardware model for a future Merlin handoff, without implementing that integration.

@@ -8,7 +8,7 @@ cmake -S . -B build -G Ninja && cmake --build build
 build/atlas-opt kernel.S -o kernel.opt.S --viz kernel.html
 ```
 
-The [RTL extraction plan](.agents/notes/RTL_GRAPH_PLAN.md) and [profile guide](docs/rtlgraph-model.md) describe optional partial profiles for `EE290SimConfig`, under `profiles/EE290SimConfig/{mxu0,mxu1,dma,lsu,xlu,vpu}/`. Unselected rules keep the built-in model. The [kernel regression](docs/rtlgraph-perf-validation.md) records numerical checks, measured improvements, and environment-dependent regressions. The [assembly handoff](docs/rtlgraph-contract.md) bundles `before.S`, profiles, resolved footprints, and compiler identity for future external consumers, including [Merlin](https://github.com/ucb-bar/merlin).
+The [RTL extraction plan](.agents/notes/RTL_GRAPH_PLAN.md) and [profile guide](docs/rtlgraph-model.md) describe extracted timing/control facts for all six components of [`EE290SimConfig`](https://github.com/ucb-ee194-tapeout/bringup-chipyard/blob/main/generators/chipyard/src/main/scala/EE290Configs.scala#L13-L26), supplied as optional partial profiles under `profiles/EE290SimConfig/{mxu0,mxu1,dma,lsu,xlu,vpu}/`. Unselected rules keep the built-in model. The [lowering walkthrough](docs/rtlgraph-lowering.md) follows hardware IR through extraction, footprints, and scheduling. The [kernel regression](docs/rtlgraph-perf-validation.md) records numerical checks, measured improvements, and environment-dependent regressions. The [assembly handoff](docs/rtlgraph-contract.md) bundles `before.S`, profiles, resolved footprints, and compiler identity for future external consumers, including [Merlin](https://github.com/ucb-bar/merlin).
 
 | Option | What it does |
 |---|---|
@@ -44,7 +44,7 @@ Prior fixed-latency work must finish before the CSR executes. Each possibly pend
 
 Releases assume idle entry; unmarked CSR behavior is unchanged. A release provides no host acknowledgment, buffer ownership, or IMEM-slot exit proof. `--check` checks modeled completion; optimization additionally requires explicit DMA waits on every path.
 
-The optional RTL DMA profile uses issue-captured operands and `DMA.CONFIG`, VMEM word pointers, configured 37-bit DRAM ranges, and explicit completion lifetimes. Matching waits may cross known branches, joins, and loops; `--passes strip-artifacts,insert-dma-waits,fill-delay-slots,schedule` inserts missing waits using the selected model. Wait insertion is opt-in. Fixed-latency engines still drain at block boundaries, and unknown branch targets or DMA delay slots are rejected. See the [DMA guide](docs/rtlgraph-dma-integration.md) for the admission rules.
+The optional RTL DMA profile uses issue-captured operands and `DMA.CONFIG`, VMEM word pointers, configured 37-bit DRAM ranges, and explicit completion lifetimes. Matching waits may cross known branches, joins, and loops; `--passes strip-artifacts,insert-dma-waits,fill-delay-slots,schedule` inserts missing waits using the selected model. Wait insertion is opt-in and computes per-channel masks across the CFG before the dependency graph binds uses to waits; a join alone does not force every DMA channel to complete. Fixed-latency engines still drain at block boundaries, and unknown branch targets or DMA delay slots are rejected. See the [DMA guide](docs/rtlgraph-dma-integration.md) for the admission rules.
 
 ## Layout
 

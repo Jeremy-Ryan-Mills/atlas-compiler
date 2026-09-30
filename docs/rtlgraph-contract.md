@@ -15,7 +15,7 @@ The emitter supplies native `atlas-opt` syntax with:
 
 Export is a read-only query and requires the waits already present. Arbitrary incoming state and a dispatch ABI are outside this subset. The historical baremetal adapter is retained at [`dd7342c`](https://github.com/Jeremy-Ryan-Mills/atlas-compiler/tree/dd7342ce6a3c4d051544bf719086edb59cb80765).
 
-`atlas.rtlgraph.contract.v1` records:
+The component `.profile` formats are already versioned (currently MXU0/DMA/LSU/XLU v2 and MXU1/VPU v1). The JSON bundle `atlas.rtlgraph.contract.v1` and resolved query `atlas.footprints.v1` preserve their richer access/resource/completion semantics; a complete extracted-machine schema would extend these interfaces. The bundle records:
 
 | Field | Meaning |
 | --- | --- |

@@ -1,27 +1,27 @@
 # RTL-graph review checkpoint
 
-This checkpoint refreshes kernel validation, exercises automatic DMA waits, and consolidates the Atlas compiler tooling. Merlin implementation, the presentation, and the authorized external simulator rebuild remain deferred.
+This checkpoint refreshes kernel validation, exercises automatic DMA waits, and consolidates the Atlas compiler tooling. The [lowering walkthrough](rtlgraph-lowering.md) connects the hardware IR, extraction, profiles, and compiler consumers. Merlin implementation and fresh simulator build provenance remain deferred.
 
-## Research audit
+## Implementation scope
 
-The supplied Gemini research describes `19e3826`. Its useful topics need these corrections against the current implementation:
+The current implementation supports these distinctions:
 
-| Research claim | Supported interpretation |
+| Topic | Supported interpretation |
 | --- | --- |
-| Optimal interleaving and maximum parallelism | The [list scheduler](../src/passes/schedule.cpp) applies a heuristic under its model. Only measured whole-kernel comparisons establish observed gains. |
-| Pipeline counting establishes exact timing | [Connected analysis](../scripts/rtlgraph_instruction_timing.py) follows state, hierarchy, valid signals, and guards. [XLU evidence](rtlgraph-xlu-connected.md) demonstrates numerically correct overlap prohibited by frontend assertions. |
+| Scheduling quality | The [list scheduler](../src/passes/schedule.cpp) applies a heuristic under its model. Only measured whole-kernel comparisons establish observed gains. |
+| Timing extraction | [Connected analysis](../scripts/rtlgraph_instruction_timing.py) follows state, hierarchy, valid signals, and guards. [XLU evidence](rtlgraph-xlu-connected.md) demonstrates numerically correct overlap prohibited by frontend assertions. |
 | DMA completion bounds | [The DMA profile](../profiles/EE290SimConfig/dma/atlas-dma.profile) requires explicit `DMA.WAIT`; external service time has no established finite correctness bound. |
-| Opcode encodings/register organization are not extractable | RTL encodes decode and storage facts; [MREG evidence](../profiles/EE290SimConfig/xlu/connected.json) already recovers bank/tracker relationships. Authored specs still define intended semantics, ABI, numerical behavior, and discrepancy criteria. |
-| Dynamic loops require branch prediction/host fallback | Branch prediction is unnecessary for loops. [CFG handling](../src/core/blocks.cpp) and [DMA tests](../tests/dma_wait_tests.cpp) cover known joins/backedges; unknown targets and DMA delay slots remain excluded. |
-| Timing determines exact PyTorch lowerability | Supported lowering also needs shape/layout/dtype rules, numerical semantics, ABI support, and end-to-end tests. These profiles establish no PyTorch operator set. |
-| `atlas-opt` performs register allocation | [The input contract](rtlgraph-contract.md) requires assigned registers. This feature schedules instructions; it does not add generic allocation or tiling. |
-| Deployed Merlin integration and a system roofline | [The handoff](rtlgraph-contract.md) is available for a future adapter. A measured optimized reference is not a proven performance ceiling. |
+| Opcode encodings and register organization | RTL encodes decode and storage facts; [MREG evidence](../profiles/EE290SimConfig/xlu/connected.json) already recovers bank/tracker relationships. Authored specs still define intended semantics, ABI, numerical behavior, and discrepancy criteria. |
+| Loops and DMA waits | The CFG-aware [wait pass](../src/passes/insert_dma_waits.cpp#L36-L73) propagates pending sites and grows channel masks before dependency construction; joins do not automatically drain every DMA channel. [CFG handling](../src/core/blocks.cpp) and [DMA tests](../tests/dma_wait_tests.cpp) cover known joins/backedges; unknown targets and DMA delay slots remain excluded. |
+| PyTorch lowerability | Supported lowering also needs shape/layout/dtype rules, numerical semantics, ABI support, and end-to-end tests. These profiles establish no PyTorch operator set. |
+| Register assignment | [The input contract](rtlgraph-contract.md) requires assigned registers. This feature schedules instructions; it does not add generic allocation or tiling. |
+| Merlin integration and performance references | [The handoff](rtlgraph-contract.md) is available for a future adapter. A measured optimized reference is not a proven performance ceiling. |
 
-A later presentation should use real pinned CIRCT IR, event traces, and profile output instead of the research's unchecked illustrative MLIR. Distinguish Chisel elaboration, FIRRTL lowering, core-dialect queries, compiler consumption, and independent validation.
+All six components have extracted facts in partial, versioned profiles; the [JSON contract](rtlgraph-contract.md) packages them with resolved footprints. Keep Chisel elaboration, FIRRTL lowering, typed core-dialect queries/control execution, compiler consumption, and independent validation distinct. The scheduler and checker share a model; VCS whole-system replays with numerical goldens and the Verilator local XLU witness provide separate evidence within their recorded scopes.
 
 ## Current validation
 
-The [kernel regression report](rtlgraph-perf-validation.md) records 29 passing executions and 35,328 checked words across eleven original kernels and additional controlled comparisons. All 13 CTest suites pass. [Automatic-wait validation](rtlgraph-dma-integration.md) is recorded separately. Cached RTL remains finite evidence with unverified source-to-executable linkage. Gains depend on the selected heuristic and environment: layernorm is 27 edges slower with a 64-word host control, but 15 faster with the historical 128-word control; input-order priority does not remove the smaller-control regression.
+The [kernel regression report](rtlgraph-perf-validation.md) records 29 passing executions and 35,328 checked words across eleven original kernels and additional controlled comparisons. All 13 CTest suites pass. [Automatic-wait validation](rtlgraph-dma-integration.md) is recorded separately. Cached RTL remains finite evidence with unverified source-to-executable linkage. Gains depend on the selected heuristic and environment: layernorm is 27 edges slower with a 64-word host control, but 15 faster with the historical 128-word control; input-order priority does not remove the smaller-control regression. The existing-trace phase audit attributes the reversal to output DMA service time despite a 74-edge gain before its launch; the memory-system cause remains unresolved.
 
 Three other `perf_*.S` sources lacked full goldens. The [fixture generator](../scripts/rtlgraph_perf_fixtures.py) preserves VPU operations and branches while capturing both output registers after each operation. For single-matmul it substitutes exact FP8 constants and appends both BF16 result pops/writeback. Goldens use exact arithmetic, not simulator output. Initial instrumentation incorrectly mixed word and byte addressing; correcting the harness resolved that failed probe without changing RTL.
 
