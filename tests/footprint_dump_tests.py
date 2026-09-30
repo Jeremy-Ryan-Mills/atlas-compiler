@@ -186,6 +186,21 @@ class FootprintDumpTests(unittest.TestCase):
                                       capture_output=True, text=True)
             self.assertEqual(rejected.returncode, 2, rejected.stderr)
 
+    def test_priority_changes_only_ready_instruction_selection(self):
+        self.source.write_text('addi x5, x0, 1\nvmatmul.mxu1 acc0, m0, w0\necall\n')
+        for priority, first in [('critical', 'vmatmul'), ('input', 'addi')]:
+            output = self.root / (priority + '.S')
+            run = subprocess.run([str(COMPILER), str(self.source), '-o', str(output),
+                                  '--schedule-priority', priority], capture_output=True, text=True)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertTrue(output.read_text().lstrip().startswith(first))
+            checked = subprocess.run([str(COMPILER), str(output), '--check', '--validation', 'static'],
+                                     capture_output=True, text=True)
+            self.assertEqual(checked.returncode, 0, checked.stderr)
+        bad = subprocess.run([str(COMPILER), str(self.source), '--schedule-priority', 'unknown'],
+                             capture_output=True, text=True)
+        self.assertEqual(bad.returncode, 2)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -15,6 +15,7 @@ static void usage() {
                  "  --viz FILE.html    write the before/after dependency graph viewer\n"
                  "  --passes a,b,c     run only these passes (default: standard passes; see --list-passes)\n"
                  "  --list-passes      list the passes in the order they run\n"
+                 "  --schedule-priority MODE  critical (default) or input among ready instructions\n"
                  "  --dma-timing MODE  robust (default): valid for any DMA latency;\n"
                  "                     model: trust npu_model's DMA latency\n"
                  "  --check            only validate the input and report problems\n"
@@ -62,6 +63,13 @@ int main(int argc, char** argv) {
             requestedPasses = true;
             std::stringstream list(argv[++i]);
             for (std::string name; std::getline(list, name, ',');) passNames.push_back(name);
+        } else if (a == "--schedule-priority" && hasValue) {
+            const std::string priority = argv[++i];
+            if (priority != "critical" && priority != "input") {
+                std::cerr << "atlas-opt: --schedule-priority requires critical or input\n";
+                return 2;
+            }
+            ctx.schedulePriority = priority == "input" ? SchedulePriority::Input : SchedulePriority::Critical;
         } else if (a == "--validation" && hasValue) {
             const std::string mode = argv[++i];
             if (mode != "dynamic" && mode != "static") {

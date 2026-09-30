@@ -16,7 +16,7 @@ static std::runtime_error scheduleError(const Instr& in, const std::string& why)
 
 // Fixed-latency work drains at block boundaries; incoming DMA uses event guards.
 static void scheduleBlock(Block& block, const RegValues& entry, bool robustDma, bool lastBlock, bool fallthroughHalt,
-                          uint32_t dmaRegs, const MachineModel& model, const IncomingDma* incoming) {
+                          uint32_t dmaRegs, const MachineModel& model, const IncomingDma* incoming, SchedulePriority priority) {
     std::vector<Instr> nodes = blockInstructions(block);
     int nb = (int)block.body.size(), n = (int)nodes.size();
     int term = block.terminator ? nb : -1;
@@ -44,7 +44,7 @@ static void scheduleBlock(Block& block, const RegValues& entry, bool robustDma, 
     ReservationTable table;
     int cycle = 0, placed = 0, nextFree = 0, lastPlaced = 0, lastBody = -1;
     while (placed < nb) {
-        // Among ready instructions that fit this cycle, take the one on the longest path.
+        // Both priorities consider only ready, resource-legal instructions.
         int best = -1, bestWait = -1;
         bool otherWork = false;
         for (int i = 0; i < nb; i++) {
@@ -56,7 +56,7 @@ static void scheduleBlock(Block& block, const RegValues& entry, bool robustDma, 
                 if (bestWait < 0 || release(i) < release(bestWait)) bestWait = i;
                 continue;
             }
-            if (best >= 0 && height[i] <= height[best]) continue;  // ties keep program order
+            if (best >= 0 && (priority == SchedulePriority::Input || height[i] <= height[best])) continue;
             if (!table.conflict(nodes[i], g.footprints[i], cycle).empty()) continue;
             best = i;
         }
@@ -153,11 +153,14 @@ void schedule(Code& code, PassContext& ctx) {
                                    code.blocks[next].terminator && code.blocks[next].terminator->op->opClass == OpClass::Halt;
             IncomingDma incoming;
             if (ctx.model.rtlDma) incoming = {flow.before[bi].front(), &flow.commands};
-            scheduleBlock(code.blocks[bi], entry[bi], ctx.robustDma, lastBlock, fallthroughHalt, dmaRegs, ctx.model, ctx.model.rtlDma ? &incoming : nullptr);
+            scheduleBlock(code.blocks[bi], entry[bi], ctx.robustDma, lastBlock, fallthroughHalt, dmaRegs, ctx.model,
+                          ctx.model.rtlDma ? &incoming : nullptr, ctx.schedulePriority);
         } catch (const std::runtime_error& e) {
             throw std::runtime_error("block " + std::to_string(bi) + ": " + e.what());
         }
     }
     ctx.log.push_back(std::string("schedule: list-scheduled ") + std::to_string(code.blocks.size()) + " blocks (" +
                       (ctx.robustDma ? "robust" : "npu_model") + " DMA timing)");
+    if (ctx.schedulePriority == SchedulePriority::Input)
+        ctx.log.push_back("schedule: input-order priority among ready instructions; DMA-wait policy unchanged");
 }
