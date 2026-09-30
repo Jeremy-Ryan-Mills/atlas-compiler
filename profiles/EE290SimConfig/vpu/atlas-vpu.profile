@@ -1,0 +1,15 @@
+schema=atlas-vpu-profile-v1
+config=EE290SimConfig
+source_ir_sha256=d2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2
+evidence_sha256=cab22ae3500de801b4935e644c2e3e13b0824bcdd3ab1e701201159fe3904e90
+rows=32
+row_step=1
+operand_capture=issue
+read_age=0
+simple_write_age=2
+row_sum_write_age=7
+column_write_age=66
+pack_write_age=3
+pack_write_step=2
+unpack_write_age=3
+immediate_write_age=1

@@ -50,6 +50,9 @@ add_executable(dma-wait-tests tests/dma_wait_tests.cpp)
 target_link_libraries(dma-wait-tests atlas)
 add_test(NAME dma-wait-tests COMMAND dma-wait-tests)
 
+add_executable(rtlgraph-instruction-overlap EXCLUDE_FROM_ALL scripts/tests/rtlgraph_instruction_overlap.cpp)
+target_link_libraries(rtlgraph-instruction-overlap atlas)
+
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
   add_test(NAME footprint-dump-tests COMMAND ${Python3_EXECUTABLE}
@@ -58,4 +61,8 @@ if(Python3_Interpreter_FOUND)
     ${CMAKE_SOURCE_DIR}/scripts/tests/test_rtlgraph_contract.py $<TARGET_FILE:atlas-opt>)
   add_test(NAME rtlgraph-xlu-tests COMMAND ${Python3_EXECUTABLE} -B
     ${CMAKE_SOURCE_DIR}/scripts/tests/test_rtlgraph_xlu.py)
+  add_test(NAME rtlgraph-xlu-connected-tests COMMAND ${Python3_EXECUTABLE} -B
+    ${CMAKE_SOURCE_DIR}/scripts/tests/test_rtlgraph_xlu_connected.py)
+  add_test(NAME rtlgraph-instruction-tests COMMAND ${Python3_EXECUTABLE} -B
+    ${CMAKE_SOURCE_DIR}/scripts/tests/test_rtlgraph_instruction_timing.py)
 endif()

@@ -1,10 +1,19 @@
 {
-  "schema": "atlas.rtlgraph.lsu-profile.v1",
+  "schema": "atlas.rtlgraph.lsu-profile.v2",
   "config": "EE290SimConfig",
-  "status": "typed_conditional_facts_rechecked",
+  "status": "scalar_control_composed_with_preserved_vector_evidence",
   "inputs": {
     "hardware_ir": {
       "sha256": "d2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2"
+    },
+    "typed_output": {
+      "sha256": "3eb7f807419a5af1742801ebd00b3c02edb1b508952cc1ce2cac5a313646633b"
+    },
+    "extractor": {
+      "sha256": "a61acbc71bc16af0fd2caed16e83801fdb55c9f32673c9cd9713c632abe60aad"
+    },
+    "typed_query": {
+      "sha256": "74972918c719c51e9ac64169c8814f2bdcdbda4fa48ed5bcf43accbda8c8f096"
     }
   },
   "compiler_overrides": {
@@ -16,16 +25,121 @@
     "vload_first_free_age": 35,
     "vstore_read_age": 1,
     "vstore_write_age": 3,
-    "vstore_first_free_age": 35
+    "vstore_first_free_age": 35,
+    "scalar_memory_age": 1,
+    "scalar_load_write_age": 3,
+    "scalar_load_first_free_age": 3
   },
-  "scope": "Conditional VLOAD/VSTORE row access and path occupancy under checked routing and arbitration exclusions.",
-  "limitations": [
-    "Logical MREG reservations and same-cycle visibility remain inherited.",
-    "Runtime addresses must be aligned, in range, nonwrapping, and collision free.",
-    "This is not an unbounded whole-RTL proof."
+  "vector_evidence": {
+    "schema": "atlas.rtlgraph.lsu-profile.v1",
+    "config": "EE290SimConfig",
+    "status": "typed_conditional_facts_rechecked",
+    "inputs": {
+      "hardware_ir": {
+        "sha256": "d2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2"
+      }
+    },
+    "compiler_overrides": {
+      "rows": 32,
+      "row_step": 1,
+      "operand_capture": "issue",
+      "vload_read_age": 1,
+      "vload_write_age": 3,
+      "vload_first_free_age": 35,
+      "vstore_read_age": 1,
+      "vstore_write_age": 3,
+      "vstore_first_free_age": 35
+    },
+    "scope": "Conditional VLOAD/VSTORE row access and path occupancy under checked routing and arbitration exclusions.",
+    "limitations": [
+      "Logical MREG reservations and same-cycle visibility remain inherited.",
+      "Runtime addresses must be aligned, in range, nonwrapping, and collision free.",
+      "This is not an unbounded whole-RTL proof."
+    ],
+    "provenance": {
+      "extraction_commit": "dd7342ce6a3c4d051544bf719086edb59cb80765",
+      "detail": "The extraction tools, mutation tests, and full evidence ledger remain in Git history at this commit."
+    }
+  },
+  "scalar_events": {
+    "load": {
+      "io_scalarMemCmd_valid": [
+        1
+      ],
+      "memLoadPending": [
+        1,
+        2
+      ],
+      "memLoadRespValid": [
+        3
+      ],
+      "isMemLoadWB": [
+        3
+      ],
+      "io_vmemScalarRead_valid": [
+        1
+      ],
+      "io_scalarResp_valid": [
+        2
+      ],
+      "io_scalarBusy": [
+        2
+      ]
+    },
+    "scale_load": {
+      "io_scalarMemCmd_valid": [
+        1
+      ],
+      "memLoadPending": [
+        1,
+        2
+      ],
+      "memLoadRespValid": [
+        3
+      ],
+      "seldWriteEn": [
+        3
+      ],
+      "io_vmemScalarRead_valid": [
+        1
+      ],
+      "io_scalarResp_valid": [
+        2
+      ],
+      "io_scalarBusy": [
+        2
+      ]
+    },
+    "store": {
+      "io_scalarMemCmd_valid": [
+        1
+      ],
+      "io_scalarMemCmd_bits_isStore": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "io_vmemScalarWrite_valid": [
+        1
+      ]
+    }
+  },
+  "assumptions": [
+    "Age zero is an accepted engine command.",
+    "Synchronous reset and idle flush precede launch; unknown-state propagation must establish known timing outputs. Unreset operand metadata is only inspected when valid.",
+    "Each MREG/VMEM request receives its corresponding valid response one cycle later.",
+    "No conflicting external port access or reset during transactions.",
+    "ScalarCore issueScalarLoad/issueScalarStore and decoded mem_cmd are explicit accepted-command cutpoints; hostStart stays low.",
+    "Scalar command/response connections follow the AtlasCore direct wiring; whole-frontend control is outside these scalar cones."
   ],
-  "provenance": {
-    "extraction_commit": "dd7342ce6a3c4d051544bf719086edb59cb80765",
-    "detail": "The extraction tools, mutation tests, and full evidence ledger remain in Git history at this commit."
-  }
+  "limitations": [
+    "Finite control execution, not numerical arithmetic validation or unbounded proof.",
+    "Whole-system memory arbitration and frontend acceptance are separate obligations.",
+    "SV assertion regions are outside these output cones; engine overlap does not establish ScalarCore assertion legality. Existing compiler logical reservations remain enforced.",
+    "Scalar load/store address translation, byte masks and numerical payloads are outside valid-only extraction."
+  ]
 }

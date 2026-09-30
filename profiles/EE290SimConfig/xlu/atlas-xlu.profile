@@ -1,10 +1,12 @@
-schema=atlas-xlu-profile-v1
+schema=atlas-xlu-profile-v2
 config=EE290SimConfig
 source_ir_sha256=d2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2
-evidence_sha256=5cb43832bf729032b43439f4f05b2046f9275264b4cec7c0498fdc91e0675e94
+evidence_sha256=ecfb455f8595806a124cbaebb6bef2f612b9ab6bbfcd5bcb991cda652ccc8cc9
 rows=32
 row_step=1
 operand_capture=issue
 read_age=1
 write_age=34
 first_free_age=66
+read_release_age=33
+write_release_age=65

@@ -1,0 +1,1036 @@
+{
+  "schema": "atlas.rtlgraph.vpu-profile.v1",
+  "config": "EE290SimConfig",
+  "status": "connected_typed_control_execution",
+  "inputs": {
+    "hardware_ir": {
+      "sha256": "d2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2"
+    },
+    "typed_output": {
+      "sha256": "3eb7f807419a5af1742801ebd00b3c02edb1b508952cc1ce2cac5a313646633b"
+    },
+    "extractor": {
+      "sha256": "a61acbc71bc16af0fd2caed16e83801fdb55c9f32673c9cd9713c632abe60aad"
+    },
+    "typed_query": {
+      "sha256": "74972918c719c51e9ac64169c8814f2bdcdbda4fa48ed5bcf43accbda8c8f096"
+    }
+  },
+  "mutation_checks": [
+    "Bypassing Relu valid pipeline advances extracted writes.",
+    "Payload-dependent VPU control is rejected.",
+    "Adding an MXU1 valid pipeline stage delays accumulator writes by one."
+  ],
+  "compiler_overrides": {
+    "rows": 32,
+    "row_step": 1,
+    "operand_capture": "issue",
+    "read_age": 0,
+    "simple_write_age": 2,
+    "row_sum_write_age": 7,
+    "column_write_age": 66,
+    "pack_write_age": 3,
+    "pack_write_step": 2,
+    "unpack_write_age": 3,
+    "immediate_write_age": 1
+  },
+  "instructions": {
+    "add": {
+      "reads": [
+        {
+          "bank": 2,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 6,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 7,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 2,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 34,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": 63,
+      "write_release": 65,
+      "same_op_next_issue": 65
+    },
+    "sub": {
+      "reads": [
+        {
+          "bank": 2,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 6,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 7,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 2,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 34,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": 63,
+      "write_release": 65,
+      "same_op_next_issue": 65
+    },
+    "mul": {
+      "reads": [
+        {
+          "bank": 2,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 6,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 7,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 2,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 34,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": 63,
+      "write_release": 65,
+      "same_op_next_issue": 65
+    },
+    "rcp": {
+      "reads": [
+        {
+          "bank": 2,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 2,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 34,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": 63,
+      "write_release": 65,
+      "same_op_next_issue": 65
+    },
+    "sqrt": {
+      "reads": [
+        {
+          "bank": 2,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 2,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 34,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": 63,
+      "write_release": 65,
+      "same_op_next_issue": 65
+    },
+    "sin": {
+      "reads": [
+        {
+          "bank": 2,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 2,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 34,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": 63,
+      "write_release": 65,
+      "same_op_next_issue": 65
+    },
+    "cos": {
+      "reads": [
+        {
+          "bank": 2,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 2,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 34,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": 63,
+      "write_release": 65,
+      "same_op_next_issue": 65
+    },
+    "tanh": {
+      "reads": [
+        {
+          "bank": 2,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 2,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 34,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": 63,
+      "write_release": 65,
+      "same_op_next_issue": 65
+    },
+    "log": {
+      "reads": [
+        {
+          "bank": 2,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 2,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 34,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": 63,
+      "write_release": 65,
+      "same_op_next_issue": 65
+    },
+    "exp": {
+      "reads": [
+        {
+          "bank": 2,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 2,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 34,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": 63,
+      "write_release": 65,
+      "same_op_next_issue": 65
+    },
+    "exp2": {
+      "reads": [
+        {
+          "bank": 2,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 2,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 34,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": 63,
+      "write_release": 65,
+      "same_op_next_issue": 65
+    },
+    "square": {
+      "reads": [
+        {
+          "bank": 2,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 2,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 34,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": 63,
+      "write_release": 65,
+      "same_op_next_issue": 65
+    },
+    "cube": {
+      "reads": [
+        {
+          "bank": 2,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 2,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 34,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": 63,
+      "write_release": 65,
+      "same_op_next_issue": 65
+    },
+    "rsum": {
+      "reads": [
+        {
+          "bank": 2,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 7,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 7,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": 31,
+      "write_release": 38,
+      "same_op_next_issue": 38
+    },
+    "csum": {
+      "reads": [
+        {
+          "bank": 2,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 2,
+          "age": 64,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 96,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 66,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 98,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": 127,
+      "write_release": 129,
+      "same_op_next_issue": 129
+    },
+    "fp8pack": {
+      "reads": [
+        {
+          "bank": 6,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 7,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 3,
+          "step": 2,
+          "count": 32
+        }
+      ],
+      "read_release": 63,
+      "write_release": 65,
+      "same_op_next_issue": 65
+    },
+    "fp8unpack": {
+      "reads": [
+        {
+          "bank": 6,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 3,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 35,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": 31,
+      "write_release": 66,
+      "same_op_next_issue": 66
+    },
+    "relu": {
+      "reads": [
+        {
+          "bank": 2,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 2,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 34,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": 63,
+      "write_release": 65,
+      "same_op_next_issue": 65
+    },
+    "rmax": {
+      "reads": [
+        {
+          "bank": 2,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 2,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 2,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": 31,
+      "write_release": 33,
+      "same_op_next_issue": 33
+    },
+    "rmin": {
+      "reads": [
+        {
+          "bank": 2,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 2,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 2,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": 31,
+      "write_release": 33,
+      "same_op_next_issue": 33
+    },
+    "cmax": {
+      "reads": [
+        {
+          "bank": 2,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 2,
+          "age": 64,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 96,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 66,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 98,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": 127,
+      "write_release": 129,
+      "same_op_next_issue": 129
+    },
+    "cmin": {
+      "reads": [
+        {
+          "bank": 2,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 2,
+          "age": 64,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 96,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 66,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 98,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": 127,
+      "write_release": 129,
+      "same_op_next_issue": 129
+    },
+    "pairmax": {
+      "reads": [
+        {
+          "bank": 2,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 6,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 7,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 2,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 34,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": 63,
+      "write_release": 65,
+      "same_op_next_issue": 65
+    },
+    "pairmin": {
+      "reads": [
+        {
+          "bank": 2,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 6,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 7,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 2,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 34,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": 63,
+      "write_release": 65,
+      "same_op_next_issue": 65
+    },
+    "mov": {
+      "reads": [
+        {
+          "bank": 2,
+          "age": 0,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 3,
+          "age": 32,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 2,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 34,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": 63,
+      "write_release": 65,
+      "same_op_next_issue": 65
+    },
+    "vliOne": {
+      "reads": [],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 1,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": -1,
+      "write_release": 32,
+      "same_op_next_issue": 32
+    },
+    "vliCol": {
+      "reads": [],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 1,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": -1,
+      "write_release": 32,
+      "same_op_next_issue": 32
+    },
+    "vliRow": {
+      "reads": [],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 1,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 33,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": -1,
+      "write_release": 64,
+      "same_op_next_issue": 64
+    },
+    "vliAll": {
+      "reads": [],
+      "writes": [
+        {
+          "bank": 10,
+          "age": 1,
+          "step": 1,
+          "count": 32
+        },
+        {
+          "bank": 11,
+          "age": 33,
+          "step": 1,
+          "count": 32
+        }
+      ],
+      "read_release": -1,
+      "write_release": 64,
+      "same_op_next_issue": 64
+    }
+  },
+  "overlap_checks": {
+    "ordered_pairs": 841,
+    "method": "Issue second instruction at earliest per-op issueBusy-clear age; compare both streams to independent isolated executions with distinct operands."
+  },
+  "assumptions": [
+    "Age zero is an accepted engine command.",
+    "Synchronous reset and idle flush precede launch; unknown-state propagation must establish known timing outputs. Unreset operand metadata is only inspected when valid.",
+    "Each MREG/VMEM request receives its corresponding valid response one cycle later.",
+    "No conflicting external port access or reset during transactions."
+  ],
+  "checks": [
+    "Every timing output and transitive state-update cone is independent of payload inputs.",
+    "Physical read/write row streams, active register reservations and issue-busy masks execute from typed hierarchy.",
+    "All 29 implemented commands are checked; reserved fp8 command is excluded."
+  ],
+  "limitations": [
+    "Finite control execution, not numerical arithmetic validation or unbounded proof.",
+    "Whole-system memory arbitration and frontend acceptance are separate obligations.",
+    "SV assertion regions are outside these output cones; engine overlap does not establish ScalarCore assertion legality. Existing compiler logical reservations remain enforced."
+  ]
+}

@@ -18,6 +18,7 @@ profiles/EE290SimConfig/
     dma/atlas-dma.profile
     lsu/atlas-lsu.profile
     xlu/atlas-xlu.profile
+    vpu/atlas-vpu.profile
 ```
 
 Each directory also retains canonical evidence for the projection. Profile and
@@ -31,33 +32,40 @@ build/atlas-opt before.S -o after.S \
   --experimental-mxu1-profile profiles/EE290SimConfig/mxu1/atlas-mxu1.profile \
   --rtl-dma-profile profiles/EE290SimConfig/dma/atlas-dma.profile \
   --rtl-lsu-profile profiles/EE290SimConfig/lsu/atlas-lsu.profile \
-  --rtl-xlu-profile profiles/EE290SimConfig/xlu/atlas-xlu.profile
+  --rtl-xlu-profile profiles/EE290SimConfig/xlu/atlas-xlu.profile \
+  --rtl-vpu-profile profiles/EE290SimConfig/vpu/atlas-vpu.profile
 ```
 
 Omit a profile to retain the built-in behavior for that component. Selecting
-RTL DMA requires robust DMA timing, explicit matching `DMA.WAIT` instructions,
-and same-block completion in the supported scheduling subset. No automatic wait
-insertion is added by this feature.
+RTL DMA requires robust DMA timing. Matching `DMA.WAIT` instructions may be
+supplied or inserted with the optional `insert-dma-waits` pass; lifetimes may
+cross known control-flow edges, including joins and loops. See the
+[DMA integration guide](rtlgraph-dma-integration.md) for the pass sequence and
+remaining restrictions.
 
 ## Profile semantics
 
 | Component | Derived fields | Important inherited or unresolved rules |
 | --- | --- | --- |
-| MXU0 | `overwrite_acc_read_hold=0` for overwrite-only `VMATMUL.MXU0` | First-write age 63, reuse gaps, acceptance, and other resources remain built in |
+| MXU0 v2 | First-write age 63; `overwrite_acc_read_hold=0` for overwrite-only `VMATMUL.MXU0` | Reuse gaps and resource rules retained; connected control checks now cover all seven commands |
 | MXU1 | `first_write_age=3`; `overwrite_acc_read_hold=0` for overwrite-only `VMATMUL.MXU1` | Accumulating operations retain their read hold; weight and other resource rules remain built in |
 | DMA v2 | Issue-time command/config capture; 32-byte VMEM lines; eight channels and eight command slots; explicit-wait completion; LSU priority; configured 37-bit DRAM byte ranges | Off-chip completion has no fixed correctness bound; transfers above the admitted 4,096-byte subset are rejected |
-| LSU | 32 rows at unit stride; source-read age 1; destination-write age 3; first-free age 35 for `VLOAD` and `VSTORE` | Scalar LSU timing, logical MREG reservations, same-cycle visibility, and frontend issue remain built in |
-| XLU | `VTRPOSE.XLU` reads rows at ages 1–32, writes at 34–65, and permits the next launch at age 66 | Assumes idle entry and one-cycle MREG responses; logical reservation floors 33/65 and visibility rules remain inherited |
+| LSU v2 | Vector read/write/free ages 1/3/35; scalar memory request age 1, load writeback and next-load acceptance age 3 | Scalar result assumes a one-cycle VMEM response; logical MREG rules retained |
+| XLU v2 | `VTRPOSE.XLU` reads at 1–32, writes at 34–65, next launch at 66; logical read/write reservation release ages 33/65 | Connected MREG response/arbitration and ScalarCore assertions checked; conflicting higher-priority traffic must be excluded |
+| VPU | Operand access timing for 29 implemented commands, including row/column reductions, packing, unpacking and immediates | Logical reservation floors, slot capacities and lane exclusion rules retained |
 
 The LSU ages describe streams: reads occur at ages 1–32 and writes at ages 3–34.
 The load/store path hold therefore ends at age 34 inclusive. Unknown VMEM
 addresses retain conservative all-bank holds and must be legal, aligned,
 in-range, and nonwrapping at runtime.
 
-XLU timing matches the built-in model. From post-reset idle state, the extractor
-checks all 8,192 symbolic transpose bits; unsupported or data-dependent control
-is rejected. Busy commands are ignored, so software must prevent them. Delayed
-responses shift completion; delayed profiles extend logical reservation floors.
+XLU timing matches the built-in model. The extractor checks all 8,192 symbolic
+transpose bits, connected response routing, tracker identities and frontend
+hazard predicates. Busy commands are ignored. A downstream datapath can consume
+early rows before the transpose finishes, but ScalarCore assertions still forbid
+that launch while the destination is reserved. The compiler preserves that
+constraint. Same-row same-cycle MREG read/write is undefined and remains
+forbidden. See [connected XLU evidence](rtlgraph-xlu-connected.md).
 
 Regenerate with `python3 scripts/rtlgraph_xlu.py --query RTLGRAPH_EXPORT --hardware-ir atlas.hw.mlir --output DIR`, using the
 [retained typed exporter](https://github.com/Jeremy-Ryan-Mills/atlas-compiler/blob/dd7342ce6a3c4d051544bf719086edb59cb80765/scripts/rtlgraph_query.cpp).
@@ -98,10 +106,11 @@ the analysis checks command operand capture, row/address selection, response
 payload selection, destination write enables, full VMEM masks, and release. It
 does not prove arbitrary traffic or same-row read/write visibility.
 
-The MXU profiles change only the fields listed above. Structural checks of a
-local enable or valid chain do not prove every sequencer state, operand lifetime,
-or numerical property. The VPU work corroborated current issue/resource rules
-but produced no production VPU profile and no shortened RTL-derived latency.
+The [instruction coverage report](rtlgraph-instruction-coverage.md) records the
+connected VPU, scalar LSU and MXU control checks, overlap scenarios and mutations.
+They do not prove arithmetic payloads, arbitrary initial state or every frontend
+assertion. The new VPU and scalar LSU profiles corroborate current timing; they
+do not claim a new speedup.
 
 Evidence labels retain these distinctions:
 
@@ -161,14 +170,14 @@ The production profiles are a partial machine description. They do not provide:
 
 - a whole-RTL or unbounded temporal proof;
 - complete frontend acceptance and retry semantics for every instruction;
-- arbitrary cross-block DMA scheduling or a fixed external-memory bound;
+- path-sensitive DMA alias proofs, unknown branch targets, DMA in branch delay
+  slots, or a fixed external-memory bound;
 - complete payload, visibility, and interference proofs for every engine;
 - register renaming, tiling, algorithm changes, or numerical equivalence across
   different engine assignments; or
 - a direct Merlin-native resource model.
 
-The next evidence should cover consecutive and overlapping commands, broader
-shared-resource interference, remaining inherited timing fields, and a recorded
-source-to-simulator build. The [handoff guide](rtlgraph-contract.md) describes
+Consecutive and overlapping engine checks are now included, with bounded scope.
+Broader interference and remaining inherited rules still need evidence. Fresh simulator build provenance remains deferred. The [handoff guide](rtlgraph-contract.md) describes
 how Merlin can use the profiles without first flattening them into lossy issue
 gaps.

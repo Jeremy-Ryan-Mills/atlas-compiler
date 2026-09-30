@@ -1,7 +1,7 @@
-schema=atlas-lsu-profile-v1
+schema=atlas-lsu-profile-v2
 config=EE290SimConfig
 source_ir_sha256=d2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2
-evidence_sha256=8611aaf02d0ebd781dcc7b3112ceff1fdecc307c093b7b8767c49239be24a25e
+evidence_sha256=c01931538f8368ba2c19300b58e99acac1c7892932a72e6ae9c7ed94d058606a
 rows=32
 row_step=1
 operand_capture=issue
@@ -11,3 +11,6 @@ vload_first_free_age=35
 vstore_read_age=1
 vstore_write_age=3
 vstore_first_free_age=35
+scalar_memory_age=1
+scalar_load_write_age=3
+scalar_load_first_free_age=3

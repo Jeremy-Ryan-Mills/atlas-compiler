@@ -22,7 +22,9 @@ The current subset does not define arbitrary incoming machine state or a dispatc
 ABI. Emitters must produce the native syntax accepted by `atlas-opt`. The
 historical baremetal adapter remains available with the research tooling at
 `dd7342c`.
-This feature does not insert DMA waits.
+The optional [wait-insertion pass](rtlgraph-dma-integration.md) can prepare input
+using the same selected model. Export itself remains a read-only query and
+requires waits to be present.
 
 `atlas.rtlgraph.contract.v1` records:
 
@@ -30,14 +32,15 @@ This feature does not insert DMA waits.
 | --- | --- |
 | `config`, `source_ir_sha256` | `EE290SimConfig` and the common hardware-IR identity |
 | `compiler`, `source` | SHA-256 identities of `atlas-opt` and bundled `before.S` |
-| `profiles` | Selected MXU0, MXU1, DMA, LSU, and XLU projections plus canonical evidence |
+| `profiles` | Selected MXU0, MXU1, DMA, LSU, XLU, and VPU projections plus canonical evidence |
 | `footprints` | Native operand-resolved `Access`, `Hold`, reservation, and dependency data |
 | `semantics`, `limitations` | Assembly, age, completion rules, and evidence boundaries |
 | `merlin` | Pinned comparison reference and precision-loss report |
 
 The native footprint query includes known scalar/base entry state, instructions,
 row and byte-range accesses, inclusive resource holds, logical MREG reservations,
-VPU occupancy, completion-cost fields, and dependency edges. Unknown values stay
+VPU occupancy, completion-cost fields, and dependency edges. For RTL DMA it also
+exports launch-site footprints and pending incoming lifetimes at each block. Unknown values stay
 unknown. Physical port/capacity checks and control-flow admission still require
 the compiler; a footprint file alone is not a scheduler or legality proof.
 
@@ -115,7 +118,7 @@ completion events.
 
 The newer compiler
 [`ASSEMBLY_CONTRACT.md`](https://github.com/Jeremy-Ryan-Mills/atlas-compiler/blob/3ae2b5d76909c529df14c89933f737f9ab19be8d/ASSEMBLY_CONTRACT.md#L38-L68)
-is a deferred branch-integration concern. Automatic wait insertion must use the
-selected model's issue-time capture, DRAM ranges, channel/ring reuse, and memory
-conflict rules. It should be tested for register reuse and configuration changes
-when the branches meet; it does not require redesigning this handoff.
+changes the functional/executable input interface, which remains deferred.
+Selected-model wait insertion is now available in this branch and covers capture,
+range conflicts, channel/ring reuse and control flow. Future convergence must
+preserve those rules; it does not require redesigning this handoff.

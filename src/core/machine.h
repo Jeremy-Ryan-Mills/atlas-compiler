@@ -18,16 +18,21 @@ const int kLineBytes = 32;
 // Defaults retain the existing npu_model behavior. Experimental profiles require
 // separate RTL validation for the selected configuration and kernel.
 struct MachineModel {
-    int mxu1FirstWriteAge = 3;
+    int mxu0FirstWriteAge = 63, mxu1FirstWriteAge = 3;
     bool mxu1OverwriteAccReadHold = true;
     bool mxu0OverwriteAccReadHold = true;
     bool rtlDma = false;  // issue-captured commands and explicit completion lifetimes
     bool rtlDmaRanges = false;  // v2 profile: configured, projected DRAM byte ranges
-    bool rtlLsu = false;
+    bool rtlLsu = false, rtlScalarLsu = false;
+    int scalarMemoryAge = 1, scalarLoadWriteAge = 3, scalarLoadFirstFreeAge = 3;
     int vloadReadAge = 1, vloadWriteAge = 3, vloadFirstFreeAge = 35;
     int vstoreReadAge = 1, vstoreWriteAge = 3, vstoreFirstFreeAge = 35;
     bool rtlXlu = false;
     int xluReadAge = 1, xluWriteAge = 34, xluFirstFreeAge = 66;
+    int xluReadReleaseAge = 33, xluWriteReleaseAge = 65;
+    bool rtlVpu = false;
+    int vpuReadAge = 0, vpuSimpleWriteAge = 2, vpuRowSumWriteAge = 7;
+    int vpuColumnWriteAge = 66, vpuPackWriteAge = 3, vpuUnpackWriteAge = 3, vpuImmediateWriteAge = 1;
     std::string sourceIrSha256;
     std::string name = "npu_model/rtl-match";
 };
@@ -36,6 +41,7 @@ MachineModel readExperimentalMxu1Profile(const std::string& path, const MachineM
 MachineModel readExperimentalMxu0Profile(const std::string& path, const MachineModel& base = {});
 MachineModel readExperimentalDmaProfile(const std::string& path, const MachineModel& base = {});
 MachineModel readExperimentalLsuProfile(const std::string& path, const MachineModel& base = {});
+MachineModel readExperimentalVpuProfile(const std::string& path, const MachineModel& base = {});
 MachineModel readExperimentalXluProfile(const std::string& path, const MachineModel& base = {});
 
 // Storage an instruction reads or writes.

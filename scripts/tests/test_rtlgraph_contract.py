@@ -15,7 +15,7 @@ COMPILER = Path(sys.argv.pop(1)).resolve()
 REPOSITORY = Path(__file__).resolve().parents[2]
 PROFILE_ROOT = REPOSITORY / 'profiles/EE290SimConfig'
 PROFILES = {role: PROFILE_ROOT / role / f'atlas-{role}.profile'
-            for role in ('mxu0', 'mxu1', 'dma', 'lsu', 'xlu')}
+            for role in ('mxu0', 'mxu1', 'dma', 'lsu', 'xlu', 'vpu')}
 
 
 class ContractTests(unittest.TestCase):
@@ -42,6 +42,7 @@ class ContractTests(unittest.TestCase):
         load_insn = next(i for b in dump['blocks'] for i in b['instructions'] if i['opcode'] == 'vload')
         self.assertEqual({a['age'] for a in load_insn['footprint']['accesses'] if a['write']}, {3})
         self.assertTrue(dump['model']['rtl_xlu'])
+        self.assertTrue(dump['model']['rtl_vpu'])
         self.assertEqual(contract['semantics']['dma_completion'], 'explicit-wait')
         self.assertEqual(contract['merlin']['adapter_status'], 'no-lossless-gap-projection')
         moved = self.root / 'moved'

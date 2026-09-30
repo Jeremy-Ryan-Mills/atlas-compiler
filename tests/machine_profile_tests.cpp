@@ -47,9 +47,14 @@ int main() {
         model = readExperimentalDmaProfile((root / "dma/atlas-dma.profile").string(), model);
         model = readExperimentalLsuProfile((root / "lsu/atlas-lsu.profile").string(), model);
         model = readExperimentalXluProfile((root / "xlu/atlas-xlu.profile").string(), model);
+        model = readExperimentalVpuProfile((root / "vpu/atlas-vpu.profile").string(), model);
+        check(model.rtlVpu && model.vpuReadAge == 0 && model.vpuColumnWriteAge == 66,
+              "checked-in VPU timing changed");
         check(model.sourceIrSha256 == "d2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2",
               "checked-in profiles did not compose over one hardware IR");
-        check(model.rtlDma && model.rtlDmaRanges && model.rtlLsu && model.rtlXlu &&
+        check(model.rtlDma && model.rtlDmaRanges && model.rtlLsu && model.rtlScalarLsu && model.rtlXlu &&
+              model.scalarMemoryAge == 1 && model.scalarLoadWriteAge == 3 && model.scalarLoadFirstFreeAge == 3 &&
+              model.mxu0FirstWriteAge == 63 && model.xluReadReleaseAge == 33 && model.xluWriteReleaseAge == 65 &&
               model.mxu1FirstWriteAge == 3 && !model.mxu0OverwriteAccReadHold &&
               !model.mxu1OverwriteAccReadHold && model.vloadFirstFreeAge == 35 &&
               model.xluReadAge == 1 && model.xluWriteAge == 34 && model.xluFirstFreeAge == 66,
@@ -114,7 +119,7 @@ int main() {
         check(xluFootprint.accesses.size() == 2 && !xluFootprint.accesses[0].write &&
               xluFootprint.accesses[0].age == 2 && xluFootprint.accesses[1].write &&
               xluFootprint.accesses[1].age == 36 && hold(xluFootprint, Unit::Xlu).to == 68 &&
-              xluFootprint.readRelease == 34 && xluFootprint.writeRelease == 67 && xluFootprint.doneAge == 68,
+              xluFootprint.readRelease == 35 && xluFootprint.writeRelease == 68 && xluFootprint.doneAge == 68,
               "selected XLU timing did not reach physical accesses and conservative reservations");
         check(schedule(xlu, xluModel).blocks[0].issue[1] == 69,
               "selected XLU physical hold did not reach scheduling");
@@ -139,6 +144,55 @@ int main() {
               "selected MXU latency did not reach footprints and dependencies");
         check(schedule(consumer, mxuModel).blocks[0].issue[1] == 6,
               "selected MXU latency did not reach scheduling");
+
+        const std::string scalarLsu = "schema=atlas-lsu-profile-v2\n" + common +
+            "rows=32\nrow_step=1\noperand_capture=issue\n"
+            "vload_read_age=1\nvload_write_age=3\nvload_first_free_age=35\n"
+            "vstore_read_age=1\nvstore_write_age=3\nvstore_first_free_age=35\n"
+            "scalar_memory_age=2\nscalar_load_write_age=5\nscalar_load_first_free_age=5\n";
+        auto scalarModel = loadLsu(scalarLsu);
+        auto scalar = parseAsm("lw x1, 0(x0)\naddi x2, x1, 1\necall\n");
+        const auto scalarFootprint = footprintOf(scalar.instrs[0], zeroRegs(), scalarModel);
+        check(access(scalarFootprint, Res::Vmem).age == 2 &&
+              hold(scalarFootprint, Unit::ScalarWriteback).from == 5 &&
+              hold(scalarFootprint, Unit::ScalarLoad).to == 4,
+              "scalar LSU profile did not change requests, writeback and occupancy");
+        check(schedule(scalar, scalarModel).blocks[0].issue[1] == 6 &&
+              schedule(scalar, MachineModel{}).blocks[0].issue[1] == 4,
+              "scalar LSU timing did not reach dependent scheduling");
+        { std::ofstream file(temporary); file << changedLsu; }
+        auto legacyLsu = readExperimentalLsuProfile(temporary.string(), scalarModel);
+        check(!legacyLsu.rtlScalarLsu && legacyLsu.scalarLoadWriteAge == 3,
+              "LSU v1 inherited unproven scalar settings");
+
+        const std::string vpuBase = "schema=atlas-vpu-profile-v1\n" + common +
+            "rows=32\nrow_step=1\noperand_capture=issue\npack_write_step=2\n";
+        const std::string changedVpu = vpuBase +
+            "read_age=1\nsimple_write_age=5\nrow_sum_write_age=9\ncolumn_write_age=70\n"
+            "pack_write_age=6\nunpack_write_age=6\nimmediate_write_age=3\n";
+        { std::ofstream file(temporary); file << changedVpu; }
+        auto vpuModel = readExperimentalVpuProfile(temporary.string());
+        auto unary = parseAsm("vsquare.bf16 m2, m0\nvstore m2, 0(x0)\necall\n");
+        const auto unaryFootprint = footprintOf(unary.instrs[0], zeroRegs(), vpuModel);
+        check(unaryFootprint.accesses[0].age == 1 && unaryFootprint.accesses[2].age == 5 &&
+              unaryFootprint.writeRelease == 68 && unaryFootprint.doneAge == 68 &&
+              unaryFootprint.vpuLive == 68,
+              "VPU timing did not extend streams and conservative reservation floors");
+        check(schedule(unary, vpuModel).blocks[0].issue[1] == 69 &&
+              schedule(unary, MachineModel{}).blocks[0].issue[1] == 66,
+              "VPU timing did not reach scheduling");
+        selected.model = vpuModel;
+        check(!simulate(flatten(schedule(unary, MachineModel{})), selected).violations.empty(),
+              "delayed VPU checker accepted the built-in schedule");
+
+        const std::string mxu0Profile = "schema=atlas-mxu0-profile-v2\n" + common +
+            "first_write_age=64\noverwrite_acc_read_hold=0\n";
+        { std::ofstream file(temporary); file << mxu0Profile; }
+        auto mxu0Model = readExperimentalMxu0Profile(temporary.string());
+        auto mxu0Consumer = parseAsm("vmatmul.mxu0 acc0, m0, w0\nvmatpop.fp8.acc.mxu0 m8, acc0, e0\n");
+        check(schedule(mxu0Consumer, mxu0Model).blocks[0].issue[1] == 65 &&
+              footprintOf(mxu0Consumer.instrs[0], zeroRegs(), mxu0Model).doneAge == 95,
+              "MXU0 selected writeback timing did not reach scheduling");
 
         auto rejects = [&](const std::string& text, auto loader) {
             { std::ofstream file(temporary); file << text; }
@@ -189,6 +243,34 @@ int main() {
         check(conservativeDma.rtlDma && !conservativeDma.rtlDmaRanges,
               "DMA v1 gained precise ranges without supporting evidence");
         rejects(dmaV1 + "unknown=1\n", [&] { readExperimentalDmaProfile(temporary.string()); });
+
+        rejects(changedVpu + "read_age=0\n", [&] { readExperimentalVpuProfile(temporary.string()); });
+        rejects(changedVpu + "unknown=1\n", [&] { readExperimentalVpuProfile(temporary.string()); });
+        rejects(vpuBase + "read_age=4\nsimple_write_age=2\nrow_sum_write_age=7\ncolumn_write_age=66\n"
+                "pack_write_age=3\nunpack_write_age=3\nimmediate_write_age=1\n",
+                [&] { readExperimentalVpuProfile(temporary.string()); });
+        rejects(scalarLsu + "scalar_memory_age=1\n", [&] { readExperimentalLsuProfile(temporary.string()); });
+        rejects(mxu0Profile + "unknown=1\n", [&] { readExperimentalMxu0Profile(temporary.string()); });
+
+        const std::string xluV2 = "schema=atlas-xlu-profile-v2\n" + common +
+            "rows=32\nrow_step=1\noperand_capture=issue\nread_age=1\nwrite_age=34\n"
+            "first_free_age=66\nread_release_age=33\nwrite_release_age=65\n";
+        { std::ofstream file(temporary); file << xluV2; }
+        auto connectedXlu = readExperimentalXluProfile(temporary.string());
+        const auto connectedFootprint = footprintOf(xlu.instrs[0], zeroRegs(), connectedXlu);
+        check(connectedFootprint.mregReads == std::vector<int>{0} &&
+              connectedFootprint.mregWrites == std::vector<int>{2} &&
+              connectedFootprint.readRelease == 33 && connectedFootprint.writeRelease == 65,
+              "connected XLU profile lost frontend reservations");
+        auto xluStore = parseAsm("vtrpose.xlu m2, m0\nvstore m2, 0(x0)\necall\n");
+        check(schedule(xluStore, connectedXlu).blocks[0].issue[1] == 66,
+              "XLU datapath-only overlap escaped frontend assertion reservations");
+        auto prematureRead = xluV2;
+        prematureRead.replace(prematureRead.find("read_release_age=33"), std::string("read_release_age=33").size(), "read_release_age=32");
+        rejects(prematureRead, [&] { readExperimentalXluProfile(temporary.string()); });
+        auto prematureWrite = xluV2;
+        prematureWrite.replace(prematureWrite.find("write_release_age=65"), std::string("write_release_age=65").size(), "write_release_age=64");
+        rejects(prematureWrite, [&] { readExperimentalXluProfile(temporary.string()); });
 
         MachineModel other;
         other.sourceIrSha256 = std::string(64, 'f');

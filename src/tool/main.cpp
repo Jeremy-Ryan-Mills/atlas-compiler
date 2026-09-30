@@ -13,7 +13,7 @@ static void usage() {
     std::cerr << "usage: atlas-opt [options] input.S\n"
                  "  -o FILE            write the optimized program to FILE (default: stdout)\n"
                  "  --viz FILE.html    write the before/after dependency graph viewer\n"
-                 "  --passes a,b,c     run only these passes (default: all; see --list-passes)\n"
+                 "  --passes a,b,c     run only these passes (default: standard passes; see --list-passes)\n"
                  "  --list-passes      list the passes in the order they run\n"
                  "  --dma-timing MODE  robust (default): valid for any DMA latency;\n"
                  "                     model: trust npu_model's DMA latency\n"
@@ -23,6 +23,7 @@ static void usage() {
                  "  --experimental-mxu0-profile FILE  use a partial MXU0 resource profile\n"
                  "  --rtl-dma-profile FILE  use partial RTL DMA capture/completion rules\n"
                  "  --rtl-lsu-profile FILE  use partial RTL VLOAD/VSTORE timing rules\n"
+                 "  --rtl-vpu-profile FILE  use partial RTL VPU stream timing rules\n"
                  "  --rtl-xlu-profile FILE  use partial RTL VTRPOSE.XLU timing rules\n"
                  "  -q                 print nothing unless something is wrong\n";
 }
@@ -40,7 +41,7 @@ static void printProblems(const char* what, const SimResult& r) {
 }
 
 int main(int argc, char** argv) {
-    std::string input, output, vizPath, profilePath, mxu0ProfilePath, dmaProfilePath, lsuProfilePath, xluProfilePath, dumpPath;
+    std::string input, output, vizPath, profilePath, mxu0ProfilePath, dmaProfilePath, lsuProfilePath, xluProfilePath, vpuProfilePath, dumpPath;
     std::vector<std::string> passNames;
     PassContext ctx;
     bool checkOnly = false, quiet = false, requestedPasses = false;
@@ -54,6 +55,7 @@ int main(int argc, char** argv) {
         else if (a == "--experimental-mxu0-profile" && hasValue) mxu0ProfilePath = argv[++i];
         else if (a == "--rtl-dma-profile" && hasValue) dmaProfilePath = argv[++i];
         else if (a == "--rtl-lsu-profile" && hasValue) lsuProfilePath = argv[++i];
+        else if (a == "--rtl-vpu-profile" && hasValue) vpuProfilePath = argv[++i];
         else if (a == "--rtl-xlu-profile" && hasValue) xluProfilePath = argv[++i];
         else if (a == "--passes" && hasValue) {
             requestedPasses = true;
@@ -85,11 +87,12 @@ int main(int argc, char** argv) {
         if (!mxu0ProfilePath.empty()) ctx.model = readExperimentalMxu0Profile(mxu0ProfilePath, ctx.model);
         if (!dmaProfilePath.empty()) ctx.model = readExperimentalDmaProfile(dmaProfilePath, ctx.model);
         if (!lsuProfilePath.empty()) ctx.model = readExperimentalLsuProfile(lsuProfilePath, ctx.model);
+        if (!vpuProfilePath.empty()) ctx.model = readExperimentalVpuProfile(vpuProfilePath, ctx.model);
         if (!xluProfilePath.empty()) ctx.model = readExperimentalXluProfile(xluProfilePath, ctx.model);
         if (ctx.model.rtlDma && !ctx.robustDma)
             throw std::runtime_error("--rtl-dma-profile requires robust DMA timing; estimated latency cannot establish completion");
         if ((!profilePath.empty() || !mxu0ProfilePath.empty() || !dmaProfilePath.empty() ||
-             !lsuProfilePath.empty() || !xluProfilePath.empty()) && !quiet)
+             !lsuProfilePath.empty() || !xluProfilePath.empty() || !vpuProfilePath.empty()) && !quiet)
             std::cerr << "  experimental partial machine profile: " << ctx.model.name << "\n";
         if (ctx.model.rtlDma && !quiet)
             std::cerr << "  DMA cycles below are cost estimates; correctness uses explicit waits and variable-wait reservations\n";
@@ -127,9 +130,13 @@ int main(int argc, char** argv) {
         if (!quiet || bad) {
             for (const std::string& line : ctx.log) std::cerr << "  " << line << "\n";
             char buf[512];
-            std::snprintf(buf, sizeof buf, "%s: %lld -> %lld cycles (%.2fx), %lld -> %lld instructions issued\n",
-                          input.c_str(), before.cycles, after.cycles, (double)before.cycles / std::max(1LL, after.cycles),
-                          before.issued, after.issued);
+            if (before.violations.empty() && before.stopReason.empty())
+                std::snprintf(buf, sizeof buf, "%s: %lld -> %lld cycles (%.2fx), %lld -> %lld instructions issued\n",
+                              input.c_str(), before.cycles, after.cycles, (double)before.cycles / std::max(1LL, after.cycles),
+                              before.issued, after.issued);
+            else
+                std::snprintf(buf, sizeof buf, "%s: input fails model checks; output %lld modeled cycles, %lld instructions issued (no speedup comparison)\n",
+                              input.c_str(), after.cycles, after.issued);
             std::cerr << buf;
         }
         printProblems("output", after);

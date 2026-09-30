@@ -19,6 +19,8 @@ def require(condition, message):
 
 
 def integer(text):
+    if text in ('true', 'false'):
+        return int(text == 'true')
     return int(text.split(' : ')[0])
 
 
@@ -40,7 +42,8 @@ class Circuit:
     """Small two-state evaluator; unsupported operations fail closed."""
     allowed = {'hw.constant', 'hw.wire', 'hw.output', 'seq.firreg', 'comb.mux',
                'comb.and', 'comb.or', 'comb.xor', 'comb.add', 'comb.icmp',
-               'comb.extract', 'comb.concat', 'hw.array_create', 'hw.array_get'}
+               'comb.extract', 'comb.concat', 'comb.shl', 'comb.replicate',
+               'hw.array_create', 'hw.array_get'}
 
     def __init__(self, module):
         self.ops = {}
@@ -108,6 +111,12 @@ class Circuit:
                     result = (result << width(self.types[v])) | a
                 return result
             require(all(isinstance(a, int) for a in args), f'Unsupported symbolic operation: {kind}')
+            if kind == 'comb.shl':
+                return (args[0] << args[1]) & mask
+            if kind == 'comb.replicate':
+                source_width = width(self.types[operands[0]])
+                require(n % source_width == 0, 'Nonintegral replication')
+                return sum(args[0] << i for i in range(0, n, source_width))
             if kind == 'comb.icmp':
                 pred = integer(attrs['predicate'])
                 require(pred in (0, 1), 'Only equality predicates are supported')
@@ -190,11 +199,52 @@ def sha(path):
     return h.hexdigest()
 
 
+def add_connected_evidence(report, connected_path, witness_path):
+    connected = json.loads(connected_path.read_text())
+    witness = json.loads(witness_path.read_text())
+    require(connected['schema'] == 'atlas.rtlgraph.xlu-connected.v1' and
+            connected['status'] == 'connected_typed_execution_and_structural_checks', 'Unsupported connected evidence')
+    require(witness['schema'] == 'atlas.rtlgraph.xlu-connected-rtl.v1' and witness['status'] == 'passed',
+            'Connected RTL witness has not passed')
+    source = report['inputs']['hardware_ir']['sha256']
+    require(connected['inputs']['hardware_ir']['sha256'] == witness['artifacts']['hardware_ir']['sha256'] == source,
+            'Connected evidence uses different hardware IR')
+    timing = report['compiler_overrides']
+    require(all(connected['timing'][k] == timing[k] for k in ('read_age', 'write_age', 'first_free_age')),
+            'Connected timing disagrees with engine profile')
+    require(witness['results']['vstore_issue_gap'] == timing['write_age'] and
+            witness['results']['gap33_collisions'] == 32 and witness['results']['cases'] >= 192 and
+            witness['results']['source_reuse'] == 'one cycle after each read', 'Incomplete connected boundary witness')
+    require(connected['frontend_assertions']['vstore_requires_no_pending_destination_write'] and
+            connected['frontend_assertions']['xlu_destination_requires_no_pending_read_or_write'] and
+            connected['tracker']['latency'] == 0, 'Missing frontend reservation evidence')
+    report['schema'] = 'atlas.rtlgraph.xlu-profile.v2'
+    report['status'] = 'connected_typed_and_independent_rtl_checked'
+    report['inputs']['connected_evidence'] = {'sha256': sha(connected_path)}
+    report['inputs']['rtl_witness'] = {'sha256': sha(witness_path)}
+    report['connected'] = {'connectivity': connected['connectivity'], 'memory': connected['memory'],
+                           'frontend_assertions': connected['frontend_assertions'],
+                           'tracker': connected['tracker'],
+                           'logical_signal_last_ages': connected['logical_signal_last_ages'],
+                           'rtl_results': witness['results'],
+                           'rtl_artifacts': {name: {'sha256': info['sha256']} for name, info in witness['artifacts'].items()}}
+    timing['read_release_age'] = connected['logical_signal_last_ages']['read']
+    timing['write_release_age'] = connected['logical_signal_last_ages']['write']
+    report['assumptions'] = connected['assumptions']
+    report['checks'] += connected['checks']
+    report['limitations'] = ['Conditional finite typed and independent RTL execution, not an unbounded proof.',
+                            'Scalar instruction decoding and full-system VMEM/DMA execution are outside this witness.',
+                            'Numerically valid row overlap can violate frontend assertions; logical reservations remain enabled.',
+                            'Same-address read/write is undefined; strict row dependencies and physical-bank port checks remain required.']
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--query', type=Path, required=True)
     parser.add_argument('--hardware-ir', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--connected-evidence', type=Path)
+    parser.add_argument('--rtl-witness', type=Path)
     args = parser.parse_args()
     typed = subprocess.check_output([str(args.query.resolve()), str(args.hardware_ir.resolve()), 'XluEngine'])
     document = json.loads(typed)
@@ -220,10 +270,13 @@ def main():
         'limitations': ['Conditional finite typed execution, not a whole-design or unbounded proof.',
                         'Logical MREG reservations and same-cycle visibility remain inherited.',
                         'Frontend routing and MREG response timing require independent RTL validation.']}
+    require(bool(args.connected_evidence) == bool(args.rtl_witness), 'Connected evidence and independent RTL witness are both required')
+    if args.connected_evidence:
+        add_connected_evidence(report, args.connected_evidence, args.rtl_witness)
     args.output.mkdir(parents=True, exist_ok=True)
     evidence = args.output / 'profile.json'
     evidence.write_text(json.dumps(report, indent=2) + '\n')
-    fields = {'schema': 'atlas-xlu-profile-v1', 'config': report['config'],
+    fields = {'schema': 'atlas-xlu-profile-v2' if args.connected_evidence else 'atlas-xlu-profile-v1', 'config': report['config'],
               'source_ir_sha256': report['inputs']['hardware_ir']['sha256'],
               'evidence_sha256': sha(evidence), **report['compiler_overrides']}
     (args.output / 'atlas-xlu.profile').write_text(''.join(f'{k}={v}\n' for k, v in fields.items()))

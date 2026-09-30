@@ -21,19 +21,20 @@ from `AtlasShuttleVectorConfig` are historical and are not mixed with this
 profile.
 
 Fresh elaboration and CIRCT verification produced one shared hardware-IR
-identity. Typed structural analyses and finite RTL traces support five optional
+identity. Typed structural analyses and finite RTL traces support six optional
 partial profiles:
 
 | Profile | Derived compiler-facing facts |
 | --- | --- |
-| MXU0 | Overwrite-only `VMATMUL.MXU0` does not reserve an accumulator read |
+| MXU0 | First accumulator write is age 63; overwrite-only `VMATMUL.MXU0` does not reserve an accumulator read |
 | MXU1 | First accumulator write is age 3; overwrite-only `VMATMUL.MXU1` does not reserve an accumulator read |
 | DMA | Operands and configuration are captured at issue; completion is released by explicit `DMA.WAIT`; configured 37-bit DRAM ranges and VMEM/bank constraints are tracked |
-| LSU | `VLOAD` and `VSTORE` read rows at ages 1–32, write rows at ages 3–34, and first release their path at age 35 |
-| XLU | Under idle entry and one-cycle MREG responses, `VTRPOSE.XLU` reads at ages 1–32, writes at 34–65, and first releases the engine at age 66; symbolic routing checks the byte transpose |
+| LSU | Vector read/write/free ages 1/3/35; scalar memory request age 1 and writeback/next-load acceptance age 3 |
+| XLU | Under idle entry and one-cycle MREG responses, `VTRPOSE.XLU` reads at ages 1–32, writes at 34–65, and first releases the engine at age 66; connected routing checks the byte transpose; frontend assertions enforce read/write reservation release ages 33/65 |
+| VPU | Access timing for 29 implemented commands, with 841 ordered-pair control overlap checks |
 
 The checked-in projections and evidence are under
-`profiles/EE290SimConfig/{mxu0,mxu1,dma,lsu,xlu}/`. Their loaders reject malformed
+`profiles/EE290SimConfig/{mxu0,mxu1,dma,lsu,xlu,vpu}/`. Their loaders reject malformed
 fields and refuse to compose profiles from different hardware IR. Unselected
 rules retain the compiler's built-in behavior.
 
@@ -110,12 +111,13 @@ fixed off-chip completion bound; correctness uses the matching `DMA.WAIT`.
 
 ## Integration boundary
 
-`atlas-opt` accepts the five profiles independently and composes them only when
+`atlas-opt` accepts the six profiles independently and composes them only when
 their hardware identity matches. It continues to build `Access`, `Hold`, and
 `Footprint` objects and uses the existing dependency graph, list scheduler,
-reservation table, and final checker. This branch requires explicit `DMA.WAIT`
-instructions and `# atlas.release`; automatic wait insertion is a separate
-integration task.
+reservation table, and final checker. The optional `insert-dma-waits` pass adds
+matching waits using the selected model's capture and memory rules. DMA lifetimes
+may cross known control-flow edges; fixed-latency engines still drain at block
+boundaries. `# atlas.release` marks publication.
 
 The [assembly and timing handoff](../../docs/rtlgraph-contract.md) packages an
 emitter's `before.S`, selected profiles and evidence, operand-resolved
@@ -125,11 +127,11 @@ dependency and resource scheduling. A future native Merlin consumer should
 retain row accesses, bank and port occupancy, capacities, and completion events
 rather than collapsing them into mnemonic-level gaps.
 
-The newer functional assembly contract on the compiler's `insert-dma-waits`
-branch is deferred. When the branches meet, wait insertion must use the selected
-model's issue-time operand capture, DRAM ranges, channel and ring reuse, and
-completion rules. That compatibility work does not change the RTL-graph feature's
-current extraction or scheduling function.
+The newer functional assembly parser on `insert-dma-waits` remains a separate
+branch-integration task. Selected-model wait placement, captured operands,
+DRAM ranges, channel/ring reuse and CFG lifetimes are now implemented here
+without changing native assembly syntax. See the
+[DMA integration guide](../../docs/rtlgraph-dma-integration.md).
 
 ## External references
 
@@ -163,15 +165,16 @@ For Vortex, begin with a small scoreboard/operand-collector slice through the
 
 The present branch is a coherent partial-model milestone. The next work should:
 
-1. prove or conservatively model consecutive and overlapping commands, frontend
-   acceptance, and additional shared-resource interference;
+1. extend the connected command/overlap checks to broader frontend and resource
+   interference; current XLU assertions prevent a datapath-only overlap from
+   becoming an invalid schedule;
 2. replace remaining inherited timing rules only when evidence is strong enough
    to change correctness scheduling;
 3. feed a small MLP or attention kernel emitted by Merlin through the existing
    handoff, `atlas-opt`, RTL replay, and numerical validation;
 4. define a versioned complete machine schema before replacing the current
    component-specific loaders; and
-5. resolve source-to-simulator binary lineage and add scoped formal properties
+5. establish simulator build provenance and add scoped formal properties
    where finite traces are insufficient.
 
 Complete whole-hardware timing proof, arbitrary variable-latency bounds, direct

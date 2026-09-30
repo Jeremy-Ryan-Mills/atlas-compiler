@@ -169,7 +169,7 @@ Footprint footprintOf(const Instr& in, const RegValues& regs, const MachineModel
         return b.f;
     }
     int mxu = op.mxu;
-    int cf = mxu == 0 ? 63 : model.mxu1FirstWriteAge;
+    int cf = mxu == 0 ? model.mxu0FirstWriteAge : model.mxu1FirstWriteAge;
 
     switch (op.opClass) {
         case OpClass::Alu:
@@ -192,12 +192,12 @@ Footprint footprintOf(const Instr& in, const RegValues& regs, const MachineModel
         case OpClass::ScaleLoad: {
             auto addr = scalarAddress(in, regs);
             b.x(in.rs1, false, 0);
-            b.vmem(addr ? std::optional<long long>(*addr & ~3LL) : std::nullopt, 4, false, 1, 1);
-            if (op.opClass == OpClass::ScaleLoad) b.e(in.rd, true, 3);
-            else b.x(in.rd, true, 3);
-            b.hold(Unit::ScalarLoad, 0, 0, 2);
-            b.hold(Unit::ScalarWriteback, 0, 3, 3);
-            b.bankHold(addr, 1, 1);
+            b.vmem(addr ? std::optional<long long>(*addr & ~3LL) : std::nullopt, 4, false, model.scalarMemoryAge, 1);
+            if (op.opClass == OpClass::ScaleLoad) b.e(in.rd, true, model.scalarLoadWriteAge);
+            else b.x(in.rd, true, model.scalarLoadWriteAge);
+            b.hold(Unit::ScalarLoad, 0, 0, model.scalarLoadFirstFreeAge - 1);
+            b.hold(Unit::ScalarWriteback, 0, model.scalarLoadWriteAge, model.scalarLoadWriteAge);
+            b.bankHold(addr, model.scalarMemoryAge, model.scalarMemoryAge);
             break;
         }
         case OpClass::ScalarStore: {
@@ -205,8 +205,8 @@ Footprint footprintOf(const Instr& in, const RegValues& regs, const MachineModel
             int size = in.op->name == "sb" ? 1 : in.op->name == "sh" ? 2 : 4;
             b.x(in.rs1, false, 0);
             b.x(in.rs2, false, 0);
-            b.vmem(addr ? std::optional<long long>(*addr & ~(long long)(size - 1)) : std::nullopt, size, true, 1, 1);
-            b.bankHold(addr, 1, 1);
+            b.vmem(addr ? std::optional<long long>(*addr & ~(long long)(size - 1)) : std::nullopt, size, true, model.scalarMemoryAge, 1);
+            b.bankHold(addr, model.scalarMemoryAge, model.scalarMemoryAge);
             break;
         }
         case OpClass::VLoad:
@@ -301,73 +301,73 @@ Footprint footprintOf(const Instr& in, const RegValues& regs, const MachineModel
             if (op.twoInput) sources.push_back(in.rs2);
             for (int s : sources) {
                 b.needEven(s, "BF16 source");
-                b.mrows(s, false, 0);
-                b.mrows(s + 1, false, 32);
+                b.mrows(s, false, model.vpuReadAge);
+                b.mrows(s + 1, false, model.vpuReadAge + 32);
                 b.f.mregReads.push_back(s);
                 b.f.mregReads.push_back(s + 1);
             }
             b.needEven(in.rd, "BF16 destination");
-            b.mrows(in.rd, true, 2);
-            b.mrows(in.rd + 1, true, 34);
+            b.mrows(in.rd, true, model.vpuSimpleWriteAge);
+            b.mrows(in.rd + 1, true, model.vpuSimpleWriteAge + 32);
             b.f.mregWrites = {in.rd, in.rd + 1};
             b.f.readRelease = 63, b.f.writeRelease = 65;
             break;
         }
         case OpClass::VpuPack:
             b.needEven(in.rs2, "BF16 source");
-            b.mrows(in.rs2, false, 0);
-            b.mrows(in.rs2 + 1, false, 32);
+            b.mrows(in.rs2, false, model.vpuReadAge);
+            b.mrows(in.rs2 + 1, false, model.vpuReadAge + 32);
             b.e(in.rs1, false, 0);
-            b.mrows(in.rd, true, 3, 2);  // one packed FP8 row every other cycle
+            b.mrows(in.rd, true, model.vpuPackWriteAge, 2);  // one packed FP8 row every other cycle
             b.f.mregReads = {in.rs2, in.rs2 + 1};
             b.f.mregWrites = {in.rd};
             b.f.readRelease = 63, b.f.writeRelease = 65;
             break;
         case OpClass::VpuUnpack:
             b.needEven(in.rd, "BF16 destination");
-            b.mrows(in.rs2, false, 0);
+            b.mrows(in.rs2, false, model.vpuReadAge);
             b.e(in.rs1, false, 0);
-            b.mrows(in.rd, true, 3);
-            b.mrows(in.rd + 1, true, 35);
+            b.mrows(in.rd, true, model.vpuUnpackWriteAge);
+            b.mrows(in.rd + 1, true, model.vpuUnpackWriteAge + 32);
             b.f.mregReads = {in.rs2};
             b.f.mregWrites = {in.rd, in.rd + 1};
             b.f.readRelease = 31, b.f.writeRelease = 66;
             break;
         case OpClass::VpuRowReduce: {
-            int lag = op.name == "vredsum.row.bf16" ? 7 : 2;
+            int lag = op.name == "vredsum.row.bf16" ? model.vpuRowSumWriteAge : model.vpuSimpleWriteAge;
             b.needEven(in.rs1, "BF16 source");
             b.needEven(in.rd, "BF16 destination");
-            b.mrows(in.rs1, false, 0);
-            b.mrows(in.rs1 + 1, false, 0);
+            b.mrows(in.rs1, false, model.vpuReadAge);
+            b.mrows(in.rs1 + 1, false, model.vpuReadAge);
             b.mrows(in.rd, true, lag);
             b.mrows(in.rd + 1, true, lag);
             b.f.mregReads = {in.rs1, in.rs1 + 1};
             b.f.mregWrites = {in.rd, in.rd + 1};
-            b.f.readRelease = 31, b.f.writeRelease = 31 + lag;
+            b.f.readRelease = 31, b.f.writeRelease = std::max(op.name == "vredsum.row.bf16" ? 38 : 33, 31 + lag);
             break;
         }
         case OpClass::VpuColReduce:
             b.needEven(in.rs1, "BF16 source");
             b.needEven(in.rd, "BF16 destination");
             for (int pass = 0; pass < 2; pass++) {  // the source pair is streamed twice
-                b.mrows(in.rs1, false, pass * 64);
-                b.mrows(in.rs1 + 1, false, pass * 64 + 32);
+                b.mrows(in.rs1, false, model.vpuReadAge + pass * 64);
+                b.mrows(in.rs1 + 1, false, model.vpuReadAge + pass * 64 + 32);
             }
-            b.mrows(in.rd, true, 66);
-            b.mrows(in.rd + 1, true, 98);
+            b.mrows(in.rd, true, model.vpuColumnWriteAge);
+            b.mrows(in.rd + 1, true, model.vpuColumnWriteAge + 32);
             b.f.mregReads = {in.rs1, in.rs1 + 1};
             b.f.mregWrites = {in.rd, in.rd + 1};
             b.f.readRelease = 127, b.f.writeRelease = 129;
             break;
         case OpClass::VpuLoadImmPair:
             b.needEven(in.rd, "BF16 destination");
-            b.mrows(in.rd, true, 1);
-            b.mrows(in.rd + 1, true, 33);
+            b.mrows(in.rd, true, model.vpuImmediateWriteAge);
+            b.mrows(in.rd + 1, true, model.vpuImmediateWriteAge + 32);
             b.f.mregWrites = {in.rd, in.rd + 1};
             b.f.writeRelease = 64;
             break;
         case OpClass::VpuLoadImmSingle:
-            b.mrows(in.rd, true, 1);
+            b.mrows(in.rd, true, model.vpuImmediateWriteAge);
             b.f.mregWrites = {in.rd};
             b.f.writeRelease = 32;
             break;
@@ -376,9 +376,9 @@ Footprint footprintOf(const Instr& in, const RegValues& regs, const MachineModel
             b.mrows(in.rd, true, model.xluWriteAge);
             b.f.mregReads = {in.rs1};
             b.f.mregWrites = {in.rd};
-            // Retain inherited reservation floors; delayed accesses cannot release early.
-            b.f.readRelease = std::max(33, model.xluReadAge + 32);
-            b.f.writeRelease = std::max(65, model.xluWriteAge + 31);
+            // ScalarCore assertions enforce the logical reservations even without an issue stall.
+            b.f.readRelease = std::max({model.xluReadReleaseAge, model.xluReadAge + 32, model.xluWriteAge - 1});
+            b.f.writeRelease = std::max({model.xluWriteReleaseAge, model.xluWriteAge + 31, model.xluFirstFreeAge - 1});
             b.hold(Unit::Xlu, 0, 0, model.xluFirstFreeAge - 1);
             break;
 
@@ -440,7 +440,13 @@ Footprint footprintOf(const Instr& in, const RegValues& regs, const MachineModel
     }
 
     Footprint& f = b.f;
-    if (op.engine == Engine::Vpu) f.vpuLive = f.writeRelease;  // a VPU slot frees on its last write cycle
+    if (op.engine == Engine::Vpu) {
+        for (const auto& access : f.accesses) if (access.res == Res::MReg) {
+            int& release = access.write ? f.writeRelease : f.readRelease;
+            release = std::max(release, access.lastAge());
+        }
+        f.vpuLive = f.writeRelease;  // retain reservation floors for delayed profile streams
+    }
     f.doneAge = std::max(f.readRelease, f.writeRelease);
     for (const Access& a : f.accesses)
         if (!a.atCompletion) f.doneAge = std::max(f.doneAge, a.lastAge());
@@ -522,7 +528,7 @@ Dependence dependence(const Instr& a, const Footprint& fa, const Instr& b, const
         }
     }
 
-    // ScalarCore's logical MREG reservations are held until their release age.
+    // Retained model reservations are held until their release age.
     for (int r : fa.mregWrites) {
         if (contains(fb.mregReads, r))
             consider(fa.writeRelease + 1, EdgeKind::RAW, "m" + std::to_string(r) + " reserved for writing until age " + std::to_string(fa.writeRelease));

@@ -120,12 +120,12 @@ class FootprintDumpTests(unittest.TestCase):
         fields.update(read_age=2, write_age=36, first_free_age=69)
         changed = self.run_query(source, '--rtl-xlu-profile', self.profile('atlas-xlu-profile-v1', **fields))
         self.assertEqual(changed['model']['xlu_first_free_age'], 69)
-        self.assertIn('inherited', changed['semantics']['xlu_scope'])
+        self.assertIn('frontend assertions', changed['semantics']['xlu_scope'])
         f = changed['blocks'][0]['instructions'][0]['footprint']
         self.assertEqual([(a['write'], a['age'], a['step'], a['count']) for a in f['accesses']],
                          [(False, 2, 1, 32), (True, 36, 1, 32)])
         self.assertEqual(next(h['to'] for h in f['holds'] if h['unit'] == 'XLU'), 68)
-        self.assertEqual((f['read_release'], f['write_release'], f['done_age']), (34, 67, 68))
+        self.assertEqual((f['read_release'], f['write_release'], f['done_age']), (35, 68, 68))
         self.assertEqual((f['mreg_reads'], f['mreg_writes']), ([0], [2]))
 
     def test_xlu_profile_cannot_mix_hardware_identities(self):
@@ -148,6 +148,16 @@ class FootprintDumpTests(unittest.TestCase):
         self.assertTrue(next(a for a in join['instructions'][0]['footprint']['accesses']
                              if a['resource'] == 'Vmem')['anywhere'])
         self.assertEqual(sum(i['delay_slot'] for b in data['blocks'] for i in b['instructions']), 2)
+
+    def test_pending_dma_crosses_cfg_and_remains_visible_in_export(self):
+        source = ('lui x1, 0x90000\naddi x12, x0, 32\ndma.load.ch0 x0, x1, x12\n'
+                  'jal x0, join\naddi x0, x0, 0\njoin:\ndma.wait.ch0\nlw x2, 0(x0)\necall\n')
+        data = self.run_query(source, '--rtl-dma-profile', self.dma_profile())
+        join = next(b for b in data['blocks'] if 'join' in b['labels'])
+        self.assertEqual(join['entry']['pending_dma'], [dict(channel=0, site=0, later_launches=0)])
+        launch = data['dma_launch_sites'][0]
+        self.assertTrue(any(a['at_completion'] and a['resource'] == 'Vmem' for a in launch['accesses']))
+        self.assertTrue(any(e['from'] == 0 and e['to'] == 1 for e in join['edges']))
 
     def test_invalid_input_or_cli_combination_cannot_export(self):
         self.run_query('vsquare.bf16 m1, m0\n', success=False)

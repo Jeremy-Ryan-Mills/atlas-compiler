@@ -12,7 +12,7 @@ import tempfile
 SCHEMA = 'atlas.rtlgraph.contract.v1'
 CONFIG = 'EE290SimConfig'
 FLAGS = {'mxu0': '--experimental-mxu0-profile', 'mxu1': '--experimental-mxu1-profile',
-         'dma': '--rtl-dma-profile', 'lsu': '--rtl-lsu-profile', 'xlu': '--rtl-xlu-profile'}
+         'dma': '--rtl-dma-profile', 'lsu': '--rtl-lsu-profile', 'xlu': '--rtl-xlu-profile', 'vpu': '--rtl-vpu-profile'}
 MERLIN_REF = '81a585b857838baeba35bc55eab7db10525db7cb'
 MERLIN_URL = ('https://github.com/ucb-bar/merlin/blob/' + MERLIN_REF +
               '/examples/atlas/phase1/contracts/hwbringup_atlas_v0/schedule_contract.yaml')
@@ -64,15 +64,17 @@ def profile_fields(path):
 
 def validate_profile(role, projection, evidence):
     fields, report = profile_fields(projection), read_json(evidence)
-    schemas = [f'atlas-{role}-profile-v1'] + (['atlas-dma-profile-v2'] if role == 'dma' else [])
+    schemas = [f'atlas-{role}-profile-v1'] + ([f'atlas-{role}-profile-v2'] if role in ('dma', 'lsu', 'xlu', 'mxu0') else [])
     require(fields.get('schema') in schemas and fields.get('config') == report.get('config') == CONFIG,
             f'Unsupported {role} profile')
-    if role in ('dma', 'lsu', 'xlu'):
+    if role in ('dma', 'lsu', 'xlu', 'vpu'):
         version = fields['schema'].rsplit('-', 1)[1]
         require(report.get('schema') == f'atlas.rtlgraph.{role}-profile.{version}',
                 f'Unsupported {role} evidence')
     else:
-        require(report.get('schema_version') == 1 and report.get('kind') == f'atlas-partial-{role}-profile',
+        # Connected MXU1 evidence evolved without changing its native projection.
+        versions = (1, 2) if role == 'mxu1' else ((2,) if fields['schema'].endswith('-v2') else (1,))
+        require(report.get('schema_version') in versions and report.get('kind') == f'atlas-partial-{role}-profile',
                 f'Unsupported {role} evidence')
     require(fields.get('evidence_sha256') == identity(evidence)['sha256'],
             f'{role} profile/evidence identity differs')

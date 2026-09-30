@@ -52,14 +52,14 @@ void requireValue(const Profile& profile, const std::string& key, const std::str
     if (value != expected) throw profile.error("unsupported " + key + "=" + value);
 }
 
-int readAge(const Profile& profile, const std::string& key, int maximum) {
+int readAge(const Profile& profile, const std::string& key, int maximum, int minimum = 1) {
     const std::string& value = requireField(profile, key);
     int result = 0;
     const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), result);
     if (error != std::errc{} || end != value.data() + value.size() || value.size() > 10)
         throw profile.error("invalid " + key);
-    if (result < 1 || result > maximum)
-        throw profile.error(key + " outside supported range 1.." + std::to_string(maximum));
+    if (result < minimum || result > maximum)
+        throw profile.error(key + " outside supported range " + std::to_string(minimum) + ".." + std::to_string(maximum));
     return result;
 }
 
@@ -90,21 +90,20 @@ MachineModel readProfile(const std::string& path, int mxu, const MachineModel& b
     const Fields& fields = profile.fields;
     for (const char* key : {"schema", "config", "source_ir_sha256", "evidence_sha256", "overwrite_acc_read_hold"})
         requireField(profile, key);
-    if (mxu == 1) requireField(profile, "first_write_age");
-    if (fields.size() != (mxu == 1 ? 6u : 5u) || (mxu == 0 && fields.count("first_write_age")))
-        throw profile.error("unknown fields");
-    if (fields.at("schema") != "atlas-mxu" + std::to_string(mxu) + "-profile-v1" || fields.at("config") != "EE290SimConfig")
-        throw profile.error("unsupported schema or configuration");
+    const bool mxu0Timing = mxu == 0 && fields.at("schema") == "atlas-mxu0-profile-v2";
+    const bool hasTiming = mxu == 1 || mxu0Timing;
+    if (hasTiming) requireField(profile, "first_write_age");
+    if (fields.size() != (hasTiming ? 6u : 5u)) throw profile.error("unknown fields");
+    requireValue(profile, "schema", "atlas-mxu" + std::to_string(mxu) +
+                 (mxu0Timing ? "-profile-v2" : "-profile-v1"));
+    requireValue(profile, "config", "EE290SimConfig");
     requireIdentity(profile, base);
     MachineModel model = base;
     if (mxu == 1) {
-        const std::string& age = fields.at("first_write_age");
-        if (age.empty() || age.size() > 2 || !std::all_of(age.begin(), age.end(), [](char c) { return c >= '0' && c <= '9'; }))
-            throw profile.error("invalid first_write_age");
-        model.mxu1FirstWriteAge = std::stoi(age);
         // The unchanged two-entry FIFO model requires latency shorter than a tile.
-        if (model.mxu1FirstWriteAge < 2 || model.mxu1FirstWriteAge > 32)
-            throw profile.error("first_write_age outside supported range 2..32");
+        model.mxu1FirstWriteAge = readAge(profile, "first_write_age", 32, 2);
+    } else {
+        model.mxu0FirstWriteAge = mxu0Timing ? readAge(profile, "first_write_age", 64, 33) : 63;
     }
     const std::string& hold = fields.at("overwrite_acc_read_hold");
     if (hold != "0" && hold != "1") throw profile.error("overwrite_acc_read_hold must be 0 or 1");
@@ -157,8 +156,9 @@ MachineModel readExperimentalDmaProfile(const std::string& path, const MachineMo
 MachineModel readExperimentalLsuProfile(const std::string& path, const MachineModel& base) {
     const Profile profile = loadFields("LSU profile", path);
     const Fields& fields = profile.fields;
+    const bool scalar = requireField(profile, "schema") == "atlas-lsu-profile-v2";
     const Fields supported = {
-        {"schema", "atlas-lsu-profile-v1"}, {"config", "EE290SimConfig"},
+        {"schema", scalar ? "atlas-lsu-profile-v2" : "atlas-lsu-profile-v1"}, {"config", "EE290SimConfig"},
         {"rows", "32"}, {"row_step", "1"}, {"operand_capture", "issue"},
     };
     for (const auto& [key, expected] : supported) {
@@ -172,7 +172,14 @@ MachineModel readExperimentalLsuProfile(const std::string& path, const MachineMo
     model.vstoreReadAge = readAge(profile, "vstore_read_age", 64);
     model.vstoreWriteAge = readAge(profile, "vstore_write_age", 64);
     model.vstoreFirstFreeAge = readAge(profile, "vstore_first_free_age", 128);
-    if (fields.size() != supported.size() + 8) throw profile.error("unknown fields");
+    model.rtlScalarLsu = scalar;
+    model.scalarMemoryAge = scalar ? readAge(profile, "scalar_memory_age", 64) : 1;
+    model.scalarLoadWriteAge = scalar ? readAge(profile, "scalar_load_write_age", 128) : 3;
+    model.scalarLoadFirstFreeAge = scalar ? readAge(profile, "scalar_load_first_free_age", 128) : 3;
+    if (model.scalarLoadWriteAge <= model.scalarMemoryAge ||
+        model.scalarLoadFirstFreeAge < model.scalarLoadWriteAge)
+        throw profile.error("scalar response must follow request and load path must remain held through response");
+    if (fields.size() != supported.size() + (scalar ? 11 : 8)) throw profile.error("unknown fields");
     for (bool load : {true, false}) {
         int read = load ? model.vloadReadAge : model.vstoreReadAge;
         int write = load ? model.vloadWriteAge : model.vstoreWriteAge;
@@ -188,8 +195,9 @@ MachineModel readExperimentalLsuProfile(const std::string& path, const MachineMo
 
 MachineModel readExperimentalXluProfile(const std::string& path, const MachineModel& base) {
     const Profile profile = loadFields("XLU profile", path);
+    const bool connected = requireField(profile, "schema") == "atlas-xlu-profile-v2";
     const Fields supported = {
-        {"schema", "atlas-xlu-profile-v1"}, {"config", "EE290SimConfig"},
+        {"schema", connected ? "atlas-xlu-profile-v2" : "atlas-xlu-profile-v1"}, {"config", "EE290SimConfig"},
         {"rows", "32"}, {"row_step", "1"}, {"operand_capture", "issue"},
     };
     for (const auto& [key, expected] : supported) requireValue(profile, key, expected);
@@ -200,10 +208,46 @@ MachineModel readExperimentalXluProfile(const std::string& path, const MachineMo
     model.xluReadAge = readAge(profile, "read_age", maxAge);
     model.xluWriteAge = readAge(profile, "write_age", maxAge);
     model.xluFirstFreeAge = readAge(profile, "first_free_age", maxAge);
-    if (profile.fields.size() != supported.size() + 5) throw profile.error("unknown fields");
+    model.xluReadReleaseAge = connected ? readAge(profile, "read_release_age", maxAge) :
+        std::max({33, model.xluReadAge + 32, model.xluWriteAge - 1});
+    model.xluWriteReleaseAge = connected ? readAge(profile, "write_release_age", maxAge) :
+        std::max({65, model.xluWriteAge + 31, model.xluFirstFreeAge - 1});
+    if (profile.fields.size() != supported.size() + (connected ? 7 : 5)) throw profile.error("unknown fields");
+    if (model.xluReadReleaseAge < model.xluWriteAge - 1 ||
+        model.xluWriteReleaseAge < model.xluFirstFreeAge - 1)
+        throw profile.error("logical reservations must cover frontend busy assertions");
+    if (connected && model.xluWriteAge < model.xluReadAge + 33)
+        throw profile.error("connected XLU write must follow the final one-cycle MREG response");
     if (model.xluWriteAge <= model.xluReadAge + 31 || model.xluFirstFreeAge <= model.xluWriteAge + 31)
         throw profile.error("write must follow all 32 reads and first_free must follow the last write");
     model.rtlXlu = true;
     setIdentity(model, base, profile, "XLU");
+    return model;
+}
+
+MachineModel readExperimentalVpuProfile(const std::string& path, const MachineModel& base) {
+    const Profile profile = loadFields("VPU profile", path);
+    const Fields supported = {
+        {"schema", "atlas-vpu-profile-v1"}, {"config", "EE290SimConfig"},
+        {"rows", "32"}, {"row_step", "1"}, {"operand_capture", "issue"}, {"pack_write_step", "2"},
+    };
+    for (const auto& [key, expected] : supported) requireValue(profile, key, expected);
+    requireIdentity(profile, base);
+    MachineModel model = base;
+    model.vpuReadAge = readAge(profile, "read_age", 128, 0);
+    model.vpuSimpleWriteAge = readAge(profile, "simple_write_age", 256);
+    model.vpuRowSumWriteAge = readAge(profile, "row_sum_write_age", 256);
+    model.vpuColumnWriteAge = readAge(profile, "column_write_age", 256);
+    model.vpuPackWriteAge = readAge(profile, "pack_write_age", 256);
+    model.vpuUnpackWriteAge = readAge(profile, "unpack_write_age", 256);
+    model.vpuImmediateWriteAge = readAge(profile, "immediate_write_age", 256);
+    if (profile.fields.size() != supported.size() + 9) throw profile.error("unknown fields");
+    for (int write : {model.vpuSimpleWriteAge, model.vpuRowSumWriteAge,
+                      model.vpuPackWriteAge, model.vpuUnpackWriteAge})
+        if (write <= model.vpuReadAge) throw profile.error("destination must follow source reads");
+    if (model.vpuColumnWriteAge <= model.vpuReadAge + 63)
+        throw profile.error("column reduction write must follow its first full source pass");
+    model.rtlVpu = true;
+    setIdentity(model, base, profile, "VPU");
     return model;
 }
