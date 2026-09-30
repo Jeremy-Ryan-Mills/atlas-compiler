@@ -58,7 +58,7 @@ build/atlas-opt build/rtlgraph-contract/handoff/before.S \
   --rtl-vpu-profile build/rtlgraph-contract/handoff/vpu/atlas-vpu.profile
 ```
 
-Verification reruns the native footprint query and requires exact equality. The optimizer then performs scheduling and final checks. Bundle paths are relative except for the compiler; `verify --atlas-opt` permits relocation only when the binary bytes match.
+Verification reruns the native footprint query and requires exact equality. The optimizer then performs scheduling and final checks. Bundle paths are relative except for the compiler; `verify --atlas-opt` permits relocation only when the binary bytes match. Consumers with memory-dependent branches can use the separate optimization/checking mode `--validation static` described in [the model guide](rtlgraph-model.md); it does not evaluate numerical behavior and cannot be combined with footprint export.
 
 `semantics.dma_completion` is `explicit-wait` with an RTL DMA profile and `modeled-completion` otherwise. Verification rejects missing/inconsistent timing conventions, including older bundles labeled unconditionally `explicit-wait`; re-export those bundles.
 

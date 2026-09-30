@@ -5,8 +5,9 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-import re
 import subprocess
+
+from rtlgraph_assembly import assemble, load_assembler, tokens, translate
 
 
 SOURCE = """dma.config.ch0 x0
@@ -44,27 +45,7 @@ ecall
 
 
 def baremetal(source):
-    """Only the witness's scalar/DMA subset; unknown operations fail closed."""
-    result = ['# @TIMEOUT 100000', '# @DRAM_BASE 0x90000000', '# @PERF_REPORT']
-    scalar = {'lui', 'addi', 'sub', 'beq', 'bne', 'jal', 'nop', 'ecall', 'delay'}
-    for line in source.splitlines():
-        line = line.split('#', 1)[0].strip()
-        if not line:
-            continue
-        if line.endswith(':'):
-            result.append(line)
-            continue
-        op, *args = re.split(r'[\s,]+', line)
-        match = re.fullmatch(r'dma\.(load|store|config|wait)\.ch([0-7])', op)
-        if match:
-            op = 'DMA.' + match[1].upper()
-            args.append(match[2])
-        elif op in {'csrrw', 'csrrs'} and len(args) == 3:
-            args[1], args[2] = args[2], args[1]
-        elif op not in scalar:
-            raise ValueError(f'unsupported witness instruction: {line}')
-        result.append(op.upper() + (' ' + ', '.join(args) if args else ''))
-    return '\n'.join(result) + '\n'
+    return '# @TIMEOUT 100000\n# @DRAM_BASE 0x90000000\n# @PERF_REPORT\n' + translate(source, to_compiler=False)
 
 
 def artifact(path):
@@ -76,6 +57,7 @@ def main():
     parser.add_argument('--compiler', type=Path, required=True)
     parser.add_argument('--profile', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--assembler', type=Path, help='verify instruction PC coverage against the original assembler')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     before = args.output / 'before.S'
@@ -100,6 +82,7 @@ def main():
     record = {
         'schema': 'atlas.rtlgraph.dma-witness.v1',
         'compiler': artifact(args.compiler), 'profile': artifact(args.profile), 'generator': artifact(Path(__file__)),
+        'adapter': artifact(Path(__file__).with_name('rtlgraph_assembly.py')),
         'command': command, 'native_input': artifact(before), 'native_output': artifact(after),
         'baremetal': artifact(assembly), 'golden': artifact(golden),
         'scope': 'Three 128-byte copies, both branch outcomes, pending DMA across joins/backedges, and captured pointer reuse.',
@@ -107,6 +90,29 @@ def main():
         'measurement': 'CSR cycle bracket includes matching final DMA wait; hardware execution not performed by this generator.',
         'translation': 'Restricted scalar/DMA spelling and CSR operand-order adapter; no general assembly contract conversion.',
     }
+    if args.assembler:
+        assembler = load_assembler(args.assembler)
+        native = after.read_text()
+        labels, instructions = {}, []
+        for line in native.splitlines():
+            fields = tokens(line)
+            if not fields:
+                continue
+            if fields[0].endswith(':'):
+                labels[fields[0][:-1]] = len(instructions)
+            else:
+                instructions.append(fields)
+        words = assemble(assembler, assembly.read_text())
+        if len(words) != len(instructions) or any(fields[0] == 'li' for fields in instructions):
+            raise ValueError('witness PC map requires one encoded word per native instruction')
+        expected = {labels['loop']: 3, labels['alternate']: 1, labels['joined']: 3}
+        for pc, fields in enumerate(instructions):
+            if fields == ['addi', 'x10', 'x0', '11']:
+                expected[pc] = 2
+            if fields == ['addi', 'x1', 'x1', '128']:
+                expected[pc] = 3
+        record['assembler'] = artifact(args.assembler)
+        record['expected_pc_visits'] = {str(pc): count for pc, count in sorted(expected.items())}
     (args.output / 'manifest.json').write_text(json.dumps(record, indent=2) + '\n')
     print(assembly)
 

@@ -1,0 +1,149 @@
+{
+  "schema": "atlas.rtlgraph.perf-extra-validation.v1",
+  "config": "EE290SimConfig",
+  "source_ir_sha256": "d2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2",
+  "scope": "Finite full-output checks of instrumented probes, not performance results for the three unmodified kernels. Branch-probe durations are diagnostic because their hosts were not fixed.",
+  "simulator_build_lineage": "Cached simulator and runtime hashes verified; source-to-executable build linkage remains unverified.",
+  "compiler_revision": "43de1dbd346421282b9db005869ec3bf4c44c836",
+  "compiler_sha256": "057626f940e7f0d70502f2412f0298963697ebbe209948d8dbae26ac3258c067",
+  "generator_sha256": "5c3353f0ea7f36ea924753fb8b4bc90bdbc5dee6faed241119cedd8b28f2c547",
+  "adapter_sha256": "246e2a10855545a0b6f1ebfbd355ce8019c92803e856b46b19858fe8e9d4f611",
+  "generation_manifest_sha256": "6d42b395971139e20af9e3bee3871555fc1f4a55d17d50e06874c547ae101745",
+  "profiles": {
+    "mxu0": "694044c459756582f0356373ced2517ae10c54a1fba580bf5a5b1bfd5c3a3d81",
+    "mxu1": "0b79dbbe0b1be4d0da5cefac362406b3482348e154de5ac86922d8769f11dd58",
+    "dma": "d9bbe45cb92b1319b59cfee12feb2ee62e1ff944b0fe6c05d30f7e9bef3e72ce",
+    "lsu": "3abf902587728f7de4277900305aa0900da81672e750ce5860545ef7391444bd",
+    "xlu": "916823c2ee1ad2b8134db7e3861f45b316751c3e53ac8d5766fd62a1ea21c248",
+    "vpu": "78f130fb11ebd24992fc75b120772130cb1f586b27036418c3a0a5850a15dbe6"
+  },
+  "executions": 6,
+  "golden_word_comparisons": 13312,
+  "cases": [
+    {
+      "kernel": "perf_vpu_binary",
+      "canonical_source_sha256": "a1aa6153455a3fb46318674eb7f1c97e2e59504aa12ede9245ede7ec5b4ac92f",
+      "changes": "Preserve uniform inputs, operations, scalar checks and branches; place each result pair in separate VMEM and append complete output DMA before success.",
+      "compiler_validation": "static",
+      "inserted_waits": 3,
+      "golden_sha256": "448e8acfef37936a95b86ad12c45a7cdef92e2fa206078896d29d3640716b982",
+      "checked_words_per_run": 2560,
+      "fixed_host_control": false,
+      "original": {
+        "assembly_sha256": "891f50e43222b5c9bbf4596f1b588d4a0d43c117669e110acb97d96f414ccaa7",
+        "manifest_sha256": "9586b51f2b71634b38e476b401b4180397b97456c8823e662346a2f67fa547d6",
+        "first_issue_cycle": 34325,
+        "first_issue_to_completion_edges": 8353,
+        "execution_audit": {
+          "issued_instructions": 130,
+          "pc_words_match": true,
+          "expected_pc_visits_checked": {
+            "29": 1,
+            "48": 1,
+            "67": 1,
+            "86": 1,
+            "105": 1
+          }
+        }
+      },
+      "scheduled": {
+        "assembly_sha256": "453f5076b40cc46699d4e367407e30be07bf9ee359b4c37119f8978da3fee2da",
+        "manifest_sha256": "df38e3363f560f11ad3f05bb7d283ce9ad0687db300e9239b41174bd53a4c50a",
+        "first_issue_cycle": 34661,
+        "first_issue_to_completion_edges": 8184,
+        "execution_audit": {
+          "issued_instructions": 135,
+          "pc_words_match": true,
+          "expected_pc_visits_checked": {
+            "30": 1,
+            "50": 1,
+            "70": 1,
+            "90": 1,
+            "110": 1
+          }
+        }
+      }
+    },
+    {
+      "kernel": "perf_vpu_reduction",
+      "canonical_source_sha256": "db621d52a8efbb4609f364ae651b73b5a1b781c34dd87e9243edf41f4ab5bcc3",
+      "changes": "Preserve uniform inputs, operations, scalar checks and branches; place each result pair in separate VMEM and append complete output DMA before success.",
+      "compiler_validation": "static",
+      "inserted_waits": 3,
+      "golden_sha256": "878f06a5c6f467e9ebb29e0d37da6eb45a56648877cf0f3009c33f8b4ed2eeb0",
+      "checked_words_per_run": 3072,
+      "fixed_host_control": false,
+      "original": {
+        "assembly_sha256": "61e069275835380b8fa472d55ab31bf252da7804a94557a27aaca746075e6b9b",
+        "manifest_sha256": "22478b42f1739389839152b4267e47fb7044aea6960216b38550e82adcf0dfba",
+        "first_issue_cycle": 35727,
+        "first_issue_to_completion_edges": 10090,
+        "execution_audit": {
+          "issued_instructions": 151,
+          "pc_words_match": true,
+          "expected_pc_visits_checked": {
+            "29": 1,
+            "49": 1,
+            "68": 1,
+            "88": 1,
+            "107": 1,
+            "127": 1
+          }
+        }
+      },
+      "scheduled": {
+        "assembly_sha256": "addaf5b57dfded832fb5e211884c095b366b06f31f8880d299c89238f0ad9864",
+        "manifest_sha256": "5afb2ebbdb33718f269215b76fb5322f6f9eaa07f48e598da6692e6d10dadaf1",
+        "first_issue_cycle": 35910,
+        "first_issue_to_completion_edges": 9905,
+        "execution_audit": {
+          "issued_instructions": 156,
+          "pc_words_match": true,
+          "expected_pc_visits_checked": {
+            "29": 1,
+            "50": 1,
+            "70": 1,
+            "91": 1,
+            "111": 1,
+            "132": 1
+          }
+        }
+      }
+    },
+    {
+      "kernel": "perf_mm_single",
+      "canonical_source_sha256": "f0dc8928e721ce43ece34c15c2c3e7eceaa97339e1437b3bd5685415b3767c2d",
+      "changes": "Constant FP8 inputs X=1, W0=1, W1=2 replace random preloads; append drain, both BF16 accumulator pops, complete MREG stores and output DMA; remove utilization gate.",
+      "compiler_validation": "dynamic",
+      "inserted_waits": 4,
+      "golden_sha256": "1ad239b492cab820501084afe3d7a1d4229e804ad855905781431adff47f3fd5",
+      "checked_words_per_run": 1024,
+      "fixed_host_control": true,
+      "original": {
+        "assembly_sha256": "ca9fd9acfea1ed59775612793006caaa0cdb1cd768001b9d7cb0f1e4ebf8109b",
+        "manifest_sha256": "ab8dba36ce8d37ba0efd5d02807c3585b719975d28418443c71e6aef226603ac",
+        "first_issue_cycle": 52229,
+        "first_issue_to_completion_edges": 7520,
+        "execution_audit": {
+          "issued_instructions": 71,
+          "pc_words_match": true,
+          "expected_pc_visits_checked": {}
+        }
+      },
+      "scheduled": {
+        "assembly_sha256": "17eb09790cf0e940d0e586d5388002921825b8ac76eaa80954f9d0bcd32ec58d",
+        "manifest_sha256": "5dce77187deec9109d84c71ec5d461cb2cbc7573c24c2818d7cf5e3217954451",
+        "first_issue_cycle": 52229,
+        "first_issue_to_completion_edges": 7170,
+        "execution_audit": {
+          "issued_instructions": 68,
+          "pc_words_match": true,
+          "expected_pc_visits_checked": {}
+        }
+      }
+    }
+  ],
+  "simulator_sha256": "b9ebf356e2519156eca5a46dfda9d82411d996188676a1a3fda829c1969e292b",
+  "smoke_manifest_sha256": "e7f186adfe2cdd37a368d30b7c52e6be634ba46e3f2a078e701d6c657278f702",
+  "execution_auditor_sha256": "d7cb137f92bd6a2028f891100ba2beeccc07b55f54e872141769ad01845dfb70"
+}

@@ -18,6 +18,10 @@ build/atlas-opt before.S -o after.S \
 
 Omit a profile to retain built-in behavior for that component. RTL DMA requires robust timing. Matching `DMA.WAIT` instructions may be supplied or inserted by the optional `insert-dma-waits` pass; lifetimes may cross known control-flow edges, joins, and loops. The [DMA guide](rtlgraph-dma-integration.md) specifies the pass sequence and restrictions.
 
+For memory-dependent branches that the timing simulator cannot evaluate, `--validation static` checks block dependency distances, resource reservations, fixed-engine drains, and DMA lifetimes across reachable CFG paths. It requires robust timing and an RTL DMA profile when DMA is present. It does not evaluate numerical branch conditions or estimate dynamic latency; validate the resulting program against RTL and full-output goldens. Dynamic validation remains the default.
+
+The default critical-path heuristic can be compared with `--schedule-priority input`, which prefers ready instructions in source order while retaining the same hazard/resource checks. Neither heuristic guarantees an optimal schedule; compare complete kernel runs.
+
 ## Profile semantics
 
 | Component | Derived fields | Inherited or unresolved rules |
@@ -47,23 +51,11 @@ The [instruction coverage report](rtlgraph-instruction-coverage.md) covers conne
 
 Structural facts, bounded reasoning, finite witnesses, inherited behavior, and unproved assumptions remain separate. The compiler checker uses the same model as the scheduler; it is not independent RTL validation. A finite replay demonstrates that program/input/environment. The cached simulator's saved FIRRTL matches the fresh artifact, but its source-to-executable linkage remains unverified. Fresh simulator build provenance remains deferred.
 
-## Historical kernel results
+## Kernel validation
 
-The following previously recorded results use full-output numerical goldens and applicable event checks. Times run from first Atlas issue through successful `DBG0` after output-DMA completion, under one shared host/environment per kernel. They establish historical candidate performance, not a fresh regression of every later compiler change; [the review checkpoint](rtlgraph-review.md) records the current rerun.
+The [current kernel regression](rtlgraph-perf-validation.md) is the source for complete tables and controlled comparisons: eleven original kernels retain full-output goldens, while [three instrumented probes](rtlgraph-review.md) add observations missing from the original sources. The metric is first Atlas issue through successful `DBG0` after output-DMA completion, excluding host setup/checking. Both scheduling priorities preserve hazard checks; the empirically best choice varies by kernel.
 
-| Kernel | Handwritten edges | Best profiled schedule | Reduction |
-| --- | ---: | ---: | ---: |
-| `perf_fused_attention_mxu0.S` | 25,445 | 22,132 | 13.02% |
-| `perf_fused_attention_mxu1.S` | 24,932 | 22,132 | 11.23% |
-| `perf_mm_dual_128x128x128.S` | 42,792 | 41,093 | 3.97% |
-| `perf_mm_mxu0_64x64x64.S` | 12,189 | 11,941 | 2.03% |
-| `perf_mm_mxu0_64x64x128.S` | 19,114 | 18,510 | 3.16% |
-| `perf_mm_mxu1_64x64x64.S` | 12,189 | 11,941 | 2.03% |
-| `perf_mm_mxu1_64x64x128.S` | 19,114 | 18,510 | 3.16% |
-| `perf_softmax.S` | 4,491 | 4,437 | 1.20% |
-| `perf_unary.S` | 10,181 | 9,083 | 10.78% |
-| `perf_vec_layernorm_32x32.S` | 4,608 | 4,593 | 0.33% |
-| `perf_vec_rmsnorm_softmax.S` | 8,459 | 7,554 | 10.70% |
+Earlier results, including the full historical table, remain in [the previous model guide](https://github.com/Jeremy-Ryan-Mills/atlas-compiler/blob/2f3cdec/docs/rtlgraph-model.md#L127-L146). Those selected controls showed up to 13.02% improvement on fused attention. Current reruns also expose a limitation: layernorm changes from 4,803 to 4,830 edges with a 64-word host control, while the historical 128-word control reproduces 4,608 to 4,593. Identical Atlas words can encounter a different DRAM phase after different host programming work, so one controlled speedup is not a universal performance guarantee.
 
 The expanded historical corpus recorded 24 candidate executions and 35,328 golden-word comparisons. A later four-profile LSU replay checked another 1,536 unary and 1,024 MXU0 words. Those schedules were byte-identical to earlier candidates, preserving the improvements without adding a speedup.
 

@@ -17,7 +17,7 @@ Fresh elaboration and CIRCT verification produced one shared hardware-IR identit
 | XLU | `VTRPOSE.XLU` reads at 1–32, writes at 34–65, and first releases the engine at 66; connected frontend checks retain logical reservation release ages 33/65 |
 | VPU | Access timing for 29 implemented commands, with 841 ordered-pair control overlap checks |
 
-The projections and evidence live under `profiles/EE290SimConfig/{mxu0,mxu1,dma,lsu,xlu,vpu}/`. Loaders reject malformed fields and mixed hardware identities. Unselected rules retain built-in behavior. Historical full-output RTL runs cover eleven `perf_*.S` kernels; the strongest controlled results reduce fused-attention first-issue-to-completion time from 24,932 to 22,132 edges on MXU1 and 25,445 to 22,132 on MXU0. These are finite witnesses, not universal speedup or safety proofs.
+The projections and evidence live under `profiles/EE290SimConfig/{mxu0,mxu1,dma,lsu,xlu,vpu}/`. Loaders reject malformed fields and mixed hardware identities; unselected rules retain built-in behavior. The [fresh kernel regression](../../docs/rtlgraph-perf-validation.md) covers eleven original `perf_*.S` kernels with full-output goldens, plus [three separately instrumented probes](../../docs/rtlgraph-review.md). Real-kernel wait insertion, memory-dependent branches through static CFG checks, and both scheduling priorities are exercised. The results include gains and a host-control-sensitive regression; finite execution does not establish universal speedup or safety.
 
 ## Lowering and consumers
 
@@ -53,7 +53,7 @@ For example, the vector LSU analysis checks capture, row/bank/address progressio
 
 ## Integration boundary
 
-`atlas-opt` composes profiles only when their hardware identities match. Its existing dependency graph, list scheduler, reservation table, and checker consume the resulting footprints. The optional [model-aware DMA wait pass](../../docs/rtlgraph-dma-integration.md) handles known control-flow edges, joins, and loops; fixed-latency engines still drain at block boundaries. `# atlas.release` marks publication. The functional parser on the separate [`insert-dma-waits` branch](https://github.com/Jeremy-Ryan-Mills/atlas-compiler/tree/insert-dma-waits) remains a future convergence task.
+`atlas-opt` composes profiles only when their hardware identities match. Its dependency graph, list scheduler, reservation table, and checker consume the resulting footprints. Critical-path and input-order scheduling share those legality checks. Optional `--validation static` checks known CFGs when numerical branch conditions are unavailable to the timing simulator; RTL execution remains a separate obligation. The optional [model-aware DMA wait pass](../../docs/rtlgraph-dma-integration.md) handles known control-flow edges, joins, and loops; fixed-latency engines still drain at block boundaries. `# atlas.release` marks publication. The functional parser on the separate [`insert-dma-waits` branch](https://github.com/Jeremy-Ryan-Mills/atlas-compiler/tree/insert-dma-waits) remains a future convergence task.
 
 The [assembly/timing handoff](../../docs/rtlgraph-contract.md) packages `before.S`, profiles, evidence, resolved footprints, and compiler identity for an external consumer. A future [Merlin](https://github.com/ucb-bar/merlin) adapter could preserve these as Phase 0 evidence, invoke an optional Atlas scheduling/checking step, and retain profile identity with performance measurements. No Merlin integration is implemented here. A native consumer should retain row accesses, ports, capacities, and completion events instead of flattening them into mnemonic gaps.
 
@@ -67,8 +67,8 @@ The [assembly/timing handoff](../../docs/rtlgraph-contract.md) packages `before.
 
 The reusable component is the query/evidence framework. Each target needs its own instruction identity, acceptance, completion, resource, warp, and stall semantics. A rule can constrain legal software issue on Atlas while predicting a hardware stall elsewhere.
 
-## Next milestone
+## Follow-up
 
-The immediate milestone is an updated full-output kernel regression, real-kernel DMA-wait validation, and a smaller reviewable compiler branch. [The review notes](../../docs/rtlgraph-review.md) track findings and distinguish measured outcomes from proposed work.
+The kernel regression, automatic-wait validation, static CFG checking, and tooling/documentation cleanup form the completed review checkpoint. [The review notes](../../docs/rtlgraph-review.md) retain additional findings and a draft PR description.
 
-After that, extend frontend/interference coverage and replace remaining inherited rules only where evidence supports the change. Define a versioned complete machine schema before replacing component loaders. Fresh simulator build provenance remains deferred. Whole-hardware proofs, arbitrary variable-latency bounds, Merlin implementation, and full Radiance/Vortex imports are outside this checkpoint.
+Extend frontend/interference coverage and replace remaining inherited rules only where evidence supports the change. Define a versioned complete machine schema before replacing component loaders. Fresh simulator build provenance remains deferred. Whole-hardware proofs, arbitrary variable-latency bounds, Merlin implementation, and full Radiance/Vortex imports are outside this checkpoint.

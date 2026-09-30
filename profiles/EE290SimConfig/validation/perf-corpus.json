@@ -1,0 +1,519 @@
+{
+  "schema": "atlas.rtlgraph.perf-corpus.v1",
+  "status": "passed",
+  "compiler_source_commit": "43de1dbd346421282b9db005869ec3bf4c44c836",
+  "compiler": {
+    "path": "build/rtlgraph-cfg-static/atlas-opt",
+    "sha256": "057626f940e7f0d70502f2412f0298963697ebbe209948d8dbae26ac3258c067"
+  },
+  "profiles": {
+    "dma": {
+      "path": "profiles/EE290SimConfig/dma/atlas-dma.profile",
+      "sha256": "d9bbe45cb92b1319b59cfee12feb2ee62e1ff944b0fe6c05d30f7e9bef3e72ce"
+    },
+    "lsu": {
+      "path": "profiles/EE290SimConfig/lsu/atlas-lsu.profile",
+      "sha256": "3abf902587728f7de4277900305aa0900da81672e750ce5860545ef7391444bd"
+    },
+    "vpu": {
+      "path": "profiles/EE290SimConfig/vpu/atlas-vpu.profile",
+      "sha256": "78f130fb11ebd24992fc75b120772130cb1f586b27036418c3a0a5850a15dbe6"
+    },
+    "xlu": {
+      "path": "profiles/EE290SimConfig/xlu/atlas-xlu.profile",
+      "sha256": "916823c2ee1ad2b8134db7e3861f45b316751c3e53ac8d5766fd62a1ea21c248"
+    },
+    "mxu0": {
+      "path": "profiles/EE290SimConfig/mxu0/atlas-mxu0.profile",
+      "sha256": "694044c459756582f0356373ced2517ae10c54a1fba580bf5a5b1bfd5c3a3d81"
+    },
+    "mxu1": {
+      "path": "profiles/EE290SimConfig/mxu1/atlas-mxu1.profile",
+      "sha256": "0b79dbbe0b1be4d0da5cefac362406b3482348e154de5ac86922d8769f11dd58"
+    }
+  },
+  "measurement": "Settled Atlas clock edges, first accepted instruction through successful DBG0 after all DMA channels idle.",
+  "scope": "Eleven canonical full-output fixtures. Newly emitted streams use all six profiles and are encoded-word identical to the previous combined-model streams that were freshly replayed. No additional executions are claimed for identical streams.",
+  "simulator_build_lineage": "Cached EE290SimConfig executable; source-to-binary linkage unverified; fresh external build deferred.",
+  "plan": {
+    "path": "build/rtlgraph-corpus-current/matrix-1/final-compiler-plan.json",
+    "sha256": "efcac9ca142b745f286d594a8c35a24af1ebb881a7a96329bd9fe62a6dfff6cd"
+  },
+  "assembler": {
+    "path": "/bwrcq/C/reednicolas/ee194-sp26-chipyard/generators/sp26-atlas-acc/baremetal/assembler.py",
+    "sha256": "fc3db08366d0fcba0c4ca4bd8eeef351a512145acc95ef92b6b299bbdf300bf6"
+  },
+  "kernels": {
+    "perf_fused_attention_mxu0": {
+      "canonical_source": {
+        "file": "assembly/perf_fused_attention_mxu0.S",
+        "sha256": "6a3b2778238d693b3b3b18e8b0adb3570421104832624766ad6e239b52099afe"
+      },
+      "golden": {
+        "file": "generators/perf_fused_attention_mxu0.json",
+        "sha256": "eede894ff4113767bef487639c0347ef8dc81a99e8a4cf31e64accb2184e6b70"
+      },
+      "checked_words_per_execution": 1024,
+      "handwritten_edges": 25445,
+      "previous_combined_edges": 22132,
+      "current_six_profile_edges": 22132,
+      "saved_edges": 3313,
+      "current_assembly": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_fused_attention_mxu0/final-v2-schedule/candidate.S",
+        "sha256": "08dfa784f951ef91459ae77879396dbca4e16e137c681e366da9b44b4ec7e08a"
+      },
+      "previous_assembly": {
+        "path": "build/rtlgraph-mixed-corpus/run-2/perf_fused_attention_mxu0/candidates/native_critical.S",
+        "sha256": "8191525e94f86e751f19bbd87396e3c1923199b54b47b6408c01d2aa654058d3"
+      },
+      "identical_encoded_stream_sha256": "5c2f1e4501a191f25c2396da3fe1ed755f48513c03d62c00e4618c479e93490e",
+      "fixed_host_capacity_words": 512,
+      "first_issue_cycle": 145512,
+      "handwritten_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_fused_attention_mxu0/original/manifest.json",
+        "sha256": "79fa014de0edf2a5699c9b0407c68930551421ad06d8da6feff546d23d832d78"
+      },
+      "shared_previous_current_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_fused_attention_mxu0/previous/manifest.json",
+        "sha256": "6f216a830f9c3ef9496d9364ce87ea2130b1b461f816b986ac3e639c4c97233f"
+      }
+    },
+    "perf_fused_attention_mxu1": {
+      "canonical_source": {
+        "file": "assembly/perf_fused_attention_mxu1.S",
+        "sha256": "5825060591f9a58280e2c2b15e139e0ee513b3ff8937b4203c7321f099071f91"
+      },
+      "golden": {
+        "file": "generators/perf_fused_attention_mxu1.json",
+        "sha256": "107f883a1439b618a65c99c575eb9bf38e560778788ac9902b40daab2fc755cf"
+      },
+      "checked_words_per_execution": 1024,
+      "handwritten_edges": 24932,
+      "previous_combined_edges": 22136,
+      "current_six_profile_edges": 22136,
+      "saved_edges": 2796,
+      "current_assembly": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_fused_attention_mxu1/final-v2-schedule/candidate.S",
+        "sha256": "959740cddef37d103a4ed946590ad88972b60b6c8b7dd72b72bcd2c8bfd486b3"
+      },
+      "previous_assembly": {
+        "path": "build/rtlgraph-mixed-dma/fused-mxu1/profile-candidates-1/native_critical.S",
+        "sha256": "09a3eed9cc9784ed79e1407e990f1ea53a60991419f89268acada6ccdfeefa62"
+      },
+      "identical_encoded_stream_sha256": "be4e9b21cb4f33f3bed278dbab859a2f859d22899604aafbad8a0264a23ddedb",
+      "fixed_host_capacity_words": 512,
+      "first_issue_cycle": 145512,
+      "handwritten_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_fused_attention_mxu1/original/manifest.json",
+        "sha256": "1c111f495ca2ffdc12f1469a7a439f19ac059f3f78dfa24c07cc692809cc36a8"
+      },
+      "shared_previous_current_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_fused_attention_mxu1/previous/manifest.json",
+        "sha256": "1f0db19abec744397462bf8e0914cbcd1914b0e64727c93d7b35f2ab8c6a0b8d"
+      }
+    },
+    "perf_mm_dual_128x128x128": {
+      "canonical_source": {
+        "file": "assembly/perf_mm_dual_128x128x128.S",
+        "sha256": "fe9b406e752000095f2afce493da63451f433bf701d04df13c69f1eadfc1ec32"
+      },
+      "golden": {
+        "file": "generators/perf_mm_dual_128x128x128.json",
+        "sha256": "c04f2eb4f10017f64891599fec02ef0e6b02b829912eb66f177c2e73d5e9b5b1"
+      },
+      "checked_words_per_execution": 4096,
+      "handwritten_edges": 42792,
+      "previous_combined_edges": 41551,
+      "current_six_profile_edges": 41551,
+      "saved_edges": 1241,
+      "current_assembly": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_mm_dual_128x128x128/final-v2-schedule/candidate.S",
+        "sha256": "9b76470847fda0d78d475c44dd2a88697c4130262b54425aa931ff37b3979a7d"
+      },
+      "previous_assembly": {
+        "path": "build/rtlgraph-mixed-corpus/run-2/perf_mm_dual_128x128x128/candidates/native_critical.S",
+        "sha256": "4a64f3c46864d2a0052fddb9c9ec2047bb61873ebb175a5dcef7885efca4083d"
+      },
+      "identical_encoded_stream_sha256": "bd6bda9f9ac86a4984900aa8f1277980a1494eddf28989fc9b80f1fe06bc7893",
+      "fixed_host_capacity_words": 1024,
+      "first_issue_cycle": 227491,
+      "handwritten_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_mm_dual_128x128x128/original/manifest.json",
+        "sha256": "9537cd34d0705b0a5141247cbacfb65d7fd158ef8ea362d2d9a904fe9db59afc"
+      },
+      "shared_previous_current_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_mm_dual_128x128x128/previous/manifest.json",
+        "sha256": "394663eba729c85a2c7eb086cc2935598cf94e96061cff1390d7252d946b41c5"
+      }
+    },
+    "perf_mm_mxu0_64x64x128": {
+      "canonical_source": {
+        "file": "assembly/perf_mm_mxu0_64x64x128.S",
+        "sha256": "4d051940ef9fc7b96213c79a7c0c998633621ceab90ed7d49f00fd8b8e8f1a91"
+      },
+      "golden": {
+        "file": "generators/perf_mm_mxu0_64x64x128.json",
+        "sha256": "159d32c62bd76e712689a13f13e599fe273ee5e447633f86aaf58c6feec6b88f"
+      },
+      "checked_words_per_execution": 1024,
+      "handwritten_edges": 19114,
+      "previous_combined_edges": 18510,
+      "current_six_profile_edges": 18510,
+      "saved_edges": 604,
+      "current_assembly": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_mm_mxu0_64x64x128/final-v2-schedule/candidate.S",
+        "sha256": "cff13fa7b162e02145cfe60eb8cb3d2eea0fbb5060db74bf692d2082b5b045d2"
+      },
+      "previous_assembly": {
+        "path": "build/rtlgraph-mixed-corpus/run-2/perf_mm_mxu0_64x64x128/candidates/native_critical.S",
+        "sha256": "89775aab4c281fac45d24d607d7f742f5ae9e6aed40b73d543b50da3dee6d759"
+      },
+      "identical_encoded_stream_sha256": "e08be8a6a12d0530f72314f52edce8b7a2bf588c9ba6d57961af16ff315b9490",
+      "fixed_host_capacity_words": 256,
+      "first_issue_cycle": 116070,
+      "handwritten_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_mm_mxu0_64x64x128/original/manifest.json",
+        "sha256": "501f6d8e4326da6bf80444a07ccbd0029f2e07dcf55991677ec59e435f4fcb94"
+      },
+      "shared_previous_current_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_mm_mxu0_64x64x128/previous/manifest.json",
+        "sha256": "fe2597d3011a1ad64ef171ee8ce476417e9a8065faea9d8818dd0d20aaa6320f"
+      }
+    },
+    "perf_mm_mxu0_64x64x64": {
+      "canonical_source": {
+        "file": "assembly/perf_mm_mxu0_64x64x64.S",
+        "sha256": "c615009066d5cba8a9869b403bd7df6452cf12338117b480fc7bf90d619f9cc8"
+      },
+      "golden": {
+        "file": "generators/perf_mm_mxu0_64x64x64.json",
+        "sha256": "bc8856cda5d89126b9a13da224da3e6d46955f678cbef8e26ac21cf2d267c204"
+      },
+      "checked_words_per_execution": 1024,
+      "handwritten_edges": 12189,
+      "previous_combined_edges": 11941,
+      "current_six_profile_edges": 11941,
+      "saved_edges": 248,
+      "current_assembly": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_mm_mxu0_64x64x64/final-v2-schedule/candidate.S",
+        "sha256": "3f8679f92e586d02d0f1ebc622eb36bc8b5a52df055b864477e9ad0ec4057a9b"
+      },
+      "previous_assembly": {
+        "path": "build/rtlgraph-mixed-corpus/run-2/perf_mm_mxu0_64x64x64/candidates/native_critical.S",
+        "sha256": "a48196c4f9735b313f19f86be2d896d8a4be3721bf83c9e0de059163e038f43b"
+      },
+      "identical_encoded_stream_sha256": "d41a02c2d5f0e62d415f2832651295d22a60b3cd9ade205937cde26e5da78ca1",
+      "fixed_host_capacity_words": 256,
+      "first_issue_cycle": 73067,
+      "handwritten_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_mm_mxu0_64x64x64/original/manifest.json",
+        "sha256": "381e08a49722829656febdc3d409e5902888f1efef2dcafa65a4a1ee86c69896"
+      },
+      "shared_previous_current_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_mm_mxu0_64x64x64/previous/manifest.json",
+        "sha256": "a3db86b026844557ffcee3067a8cb5f9d48a80899bad046287d14cf14510b35d"
+      }
+    },
+    "perf_mm_mxu1_64x64x128": {
+      "canonical_source": {
+        "file": "assembly/perf_mm_mxu1_64x64x128.S",
+        "sha256": "e3b013d53a248199c4609526cb8598536ba1314b93c449530bfa8f30b84ab367"
+      },
+      "golden": {
+        "file": "generators/perf_mm_mxu1_64x64x128.json",
+        "sha256": "fbb3b8dcf67cc906740966f0c118df51aa612a14289397478b6d3d849723fcd6"
+      },
+      "checked_words_per_execution": 1024,
+      "handwritten_edges": 19114,
+      "previous_combined_edges": 18510,
+      "current_six_profile_edges": 18510,
+      "saved_edges": 604,
+      "current_assembly": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_mm_mxu1_64x64x128/final-v2-schedule/candidate.S",
+        "sha256": "21e9c0eae20073c4e8fc44e86ea00cd1b472b614ab8f770854ce4a233f3fed19"
+      },
+      "previous_assembly": {
+        "path": "build/rtlgraph-mixed-corpus/run-2/perf_mm_mxu1_64x64x128/candidates/native_critical.S",
+        "sha256": "e854def1871db9bb9589d11c5b7b78e95d9146dbe44628dde9fee85f6684343c"
+      },
+      "identical_encoded_stream_sha256": "ca9b55a6db3e1dc2ab6c467453b84ad8577de876b36d412496ae0d36fed8c735",
+      "fixed_host_capacity_words": 256,
+      "first_issue_cycle": 116070,
+      "handwritten_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_mm_mxu1_64x64x128/original/manifest.json",
+        "sha256": "15584b1ab2d02d0b2285e545cea4eea6e4b97f6e3dc6c46aa4db1c846bb076f0"
+      },
+      "shared_previous_current_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_mm_mxu1_64x64x128/previous/manifest.json",
+        "sha256": "356664e3495e041a19288ce561e2c5478172ee4a0ebf8d074e7c33ff17fdc446"
+      }
+    },
+    "perf_mm_mxu1_64x64x64": {
+      "canonical_source": {
+        "file": "assembly/perf_mm_mxu1_64x64x64.S",
+        "sha256": "0c6e2003d7fe1427fd0da2dc79bb658216dc214c99d6cc2a116eeaf2c6144a28"
+      },
+      "golden": {
+        "file": "generators/perf_mm_mxu1_64x64x64.json",
+        "sha256": "0f0b5be651964ee9fdfc5bda57770606590d47fdd01f2c07e87c096703d8bfc7"
+      },
+      "checked_words_per_execution": 1024,
+      "handwritten_edges": 12189,
+      "previous_combined_edges": 11941,
+      "current_six_profile_edges": 11941,
+      "saved_edges": 248,
+      "current_assembly": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_mm_mxu1_64x64x64/final-v2-schedule/candidate.S",
+        "sha256": "ab2011f0795b9b878b4a9d591a366eae261dc3de91ab9ddd976a66834b10b631"
+      },
+      "previous_assembly": {
+        "path": "build/rtlgraph-mixed-corpus/run-2/perf_mm_mxu1_64x64x64/candidates/native_critical.S",
+        "sha256": "2000b9252828dfff3cd57eb5be89517f31dc32f0fd367550e83fa0a97b5f3b05"
+      },
+      "identical_encoded_stream_sha256": "7eb62faa4edcb00f11b021bc98c1840b01d39cb56d9ed089ef80a443ee485219",
+      "fixed_host_capacity_words": 256,
+      "first_issue_cycle": 73067,
+      "handwritten_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_mm_mxu1_64x64x64/original/manifest.json",
+        "sha256": "d7e230b86b6cd7fb5d5421cbf9c7788275cae29119a8536480f351edf3cb1746"
+      },
+      "shared_previous_current_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_mm_mxu1_64x64x64/previous/manifest.json",
+        "sha256": "7634c1b0e820e45fe589774c2735ea985824ac72b837519819765ff327da42f9"
+      }
+    },
+    "perf_softmax": {
+      "canonical_source": {
+        "file": "assembly/perf_softmax.S",
+        "sha256": "48c1d9c9a0b19694a32e93b949076ad74109393fdfd58a587a206097cd8e24a8"
+      },
+      "golden": {
+        "file": "generators/perf_softmax.json",
+        "sha256": "37010dc6557aa14c9e89721286f68b4f36404caf93bd683a761d79fefad33d8a"
+      },
+      "checked_words_per_execution": 512,
+      "handwritten_edges": 4491,
+      "previous_combined_edges": 4437,
+      "current_six_profile_edges": 4437,
+      "saved_edges": 54,
+      "current_assembly": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_softmax/final-v2-schedule/candidate.S",
+        "sha256": "f440efcea15261cc1404437a226a43ebda096eeac8c2e3bfca373ca2fd12d267"
+      },
+      "previous_assembly": {
+        "path": "build/rtlgraph-mixed-dma/vpu/softmax-candidates-1/native_critical.S",
+        "sha256": "5f036a7f4a7b73ae5159fce82994b584a2747c208c866df5a01f81f180ddd74f"
+      },
+      "identical_encoded_stream_sha256": "c60f26245809aab22906d72bfba6336e3cab5afab4cf3b7612a04604594d6835",
+      "fixed_host_capacity_words": 128,
+      "first_issue_cycle": 48431,
+      "handwritten_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_softmax/capacity128-original/manifest.json",
+        "sha256": "442ed032e9a1f6c0a171d9e9eecdcbd2f7c887914b39c67a2ae322d70050ed3c"
+      },
+      "shared_previous_current_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_softmax/capacity128-current/manifest.json",
+        "sha256": "d0bd467b08190d4f145e39f03f8284dedaa29191a3c9c9ccabc0218ffedf955f"
+      }
+    },
+    "perf_unary": {
+      "canonical_source": {
+        "file": "assembly/perf_unary.S",
+        "sha256": "9aad5d0808a0fc4498a3ebcc9c175ef2a12c250479c142c138b651bdf9f9cf03"
+      },
+      "golden": {
+        "file": "generators/perf_unary.json",
+        "sha256": "51a60e4a0aa8025ffd603414422775c1889f6eb52a4f43d4041d3822fca6252e"
+      },
+      "checked_words_per_execution": 1536,
+      "handwritten_edges": 10181,
+      "previous_combined_edges": 9083,
+      "current_six_profile_edges": 9083,
+      "saved_edges": 1098,
+      "current_assembly": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_unary/final-v2-schedule/candidate.S",
+        "sha256": "704cb0d23c753f3de26b5dba81ca2fd6ae1c3eff6d92cd42ef56bbfd9e77e081"
+      },
+      "previous_assembly": {
+        "path": "build/rtlgraph-mixed-corpus/run-2/perf_unary/candidates/native_critical.S",
+        "sha256": "df999a00405655bca0cbd2a07573e49feca40d3ce768432bc29ad52f7ed1bfb1"
+      },
+      "identical_encoded_stream_sha256": "215b8839089ea6e682455c1087bcf772cc8ec0a45c84096e8a3d863b10058c25",
+      "fixed_host_capacity_words": 128,
+      "first_issue_cycle": 57931,
+      "handwritten_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_unary/original/manifest.json",
+        "sha256": "90b4f161057d3458f08f488c2d3fea1932e5fae248fd88745a4bc175a9d66d1b"
+      },
+      "shared_previous_current_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_unary/previous/manifest.json",
+        "sha256": "242a95b7851b46b8578e24b8568674ec0715414f3fd03a54e3e67a37a08f6a14"
+      }
+    },
+    "perf_vec_layernorm_32x32": {
+      "canonical_source": {
+        "file": "assembly/perf_vec_layernorm_32x32.S",
+        "sha256": "309903ef6627b2c425ef4628c0dfc1e99221f37827741e68c87c102cedd7a337"
+      },
+      "golden": {
+        "file": "generators/perf_vec_layernorm_32x32.json",
+        "sha256": "01bdb9aacca538403575ff06dda7d9cc5b4702ae4f85388a34da5acb19363e06"
+      },
+      "checked_words_per_execution": 512,
+      "handwritten_edges": 4608,
+      "previous_combined_edges": 4593,
+      "current_six_profile_edges": 4593,
+      "saved_edges": 15,
+      "current_assembly": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_vec_layernorm_32x32/final-v2-schedule/candidate.S",
+        "sha256": "16a4f33853fdc223a284fd545a9060df54d94f4e8d9e1d8f614838ad6318d68a"
+      },
+      "previous_assembly": {
+        "path": "build/rtlgraph-mixed-dma/vpu/layernorm-candidates-1/native_critical.S",
+        "sha256": "3277e96a0e965b77a603174040c0ed342f441a4a7bec91e5ee064b944e7a6cac"
+      },
+      "identical_encoded_stream_sha256": "ca0b20ae02ac886b6fbaca9e0894fead9b5ca24d242394f8d14a451b310753b3",
+      "fixed_host_capacity_words": 128,
+      "first_issue_cycle": 48431,
+      "handwritten_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_vec_layernorm_32x32/capacity128-original/manifest.json",
+        "sha256": "7e01d1ed6d8631d5034d2efd9749ce2ec0a3c000c7436d6a1f3c2ee1be198e65"
+      },
+      "shared_previous_current_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_vec_layernorm_32x32/capacity128-current/manifest.json",
+        "sha256": "bb8d7f8daa6e45a27165e19a1bcfeb96b17ee32364617c6a1839406b34866d4a"
+      }
+    },
+    "perf_vec_rmsnorm_softmax": {
+      "canonical_source": {
+        "file": "assembly/perf_vec_rmsnorm_softmax.S",
+        "sha256": "daa8a7c344d15e53ca1016332bd01cf396b62917bc59147e4f071b1bff65b0ef"
+      },
+      "golden": {
+        "file": "generators/perf_vec_rmsnorm_softmax.json",
+        "sha256": "d1b2be379e6f4cdd5fb613a5cc11b4f0d7d42c42b7e8bdce2e1aa61f9fed371f"
+      },
+      "checked_words_per_execution": 1024,
+      "handwritten_edges": 8459,
+      "previous_combined_edges": 7554,
+      "current_six_profile_edges": 7554,
+      "saved_edges": 905,
+      "current_assembly": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_vec_rmsnorm_softmax/final-v2-schedule/candidate.S",
+        "sha256": "943aebbda4e985d2de0b71b4c782628c0cbc49313be6fbad0cb711560af9f173"
+      },
+      "previous_assembly": {
+        "path": "build/rtlgraph-mixed-corpus/run-2/perf_vec_rmsnorm_softmax/candidates/native_critical.S",
+        "sha256": "557c438a7491a84abd08caed9b3df0b6c82adb3dd5c0aa9699af5dbc654e16e5"
+      },
+      "identical_encoded_stream_sha256": "9b6f322d836111dccfbc1fe4025e1abbe49e89ca7327dd0039776dac42361306",
+      "fixed_host_capacity_words": 128,
+      "first_issue_cycle": 57193,
+      "handwritten_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_vec_rmsnorm_softmax/original/manifest.json",
+        "sha256": "fdbab2f24dd922938c5545d04067856763899667a418ebc51debaf778227fdea"
+      },
+      "shared_previous_current_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_vec_rmsnorm_softmax/previous/manifest.json",
+        "sha256": "fff9bfc9259010a1584104cc08cdd1e995ff27182c719f2ac740a0a76ff91533"
+      }
+    }
+  },
+  "additional_comparators": {
+    "perf_fused_attention_mxu1": {
+      "replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_fused_attention_mxu1/historical-dma-only/manifest.json",
+        "sha256": "527b062d6707e2583e0080752682e4fcf0adc66c3e04a92038583f0418711c38"
+      },
+      "assembly": {
+        "path": "build/rtlgraph-mixed-dma/fused-mxu1/dma-candidates-1/native_critical.S",
+        "sha256": "69d7edcc74232a6256ee24da050fc35e8d0357c316f0faa46ea1f4fe990c59b9"
+      },
+      "completion_edges": 22132,
+      "difference_from_current": 4,
+      "reason": "Prior DMA-only critical schedule, without MXU timing overrides."
+    },
+    "perf_mm_dual_128x128x128": {
+      "replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_mm_dual_128x128x128/historical-input-priority/manifest.json",
+        "sha256": "946b046d9aebe03235dd15a2d9834433a75d5577c9710cb4fd2bf5432f98af16"
+      },
+      "assembly": {
+        "path": "build/rtlgraph-mixed-corpus/run-2/perf_mm_dual_128x128x128/candidates/native_input.S",
+        "sha256": "ccfc17b87305ea7cfc94983235de69bb5b86ac35f632f75003273d022c9a253c"
+      },
+      "completion_edges": 41093,
+      "difference_from_current": 458,
+      "reason": "Prior input-order scheduler priority, rather than current critical-path priority."
+    }
+  },
+  "environment_sensitivity": {
+    "perf_softmax": {
+      "fixed_host_capacity_words": 64,
+      "handwritten_edges": 4643,
+      "current_critical_edges": 4639,
+      "saved_edges": 4,
+      "handwritten_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_softmax/original/manifest.json",
+        "sha256": "589b4a64ee887863e551415b9324056707e2bcd348372b445d6ff756b2e455d8"
+      },
+      "current_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_softmax/previous/manifest.json",
+        "sha256": "14e826c8f40f63b3dbf6b5c8074d2a767c72629b504dd1a9a3c4112f51a51429"
+      },
+      "scope": "Each pair shares its host and launch edge. Capacity changes host programming/layout and memory-system conditions between pairs; this is not a compiler-version regression."
+    },
+    "perf_vec_layernorm_32x32": {
+      "fixed_host_capacity_words": 64,
+      "handwritten_edges": 4803,
+      "current_critical_edges": 4830,
+      "saved_edges": -27,
+      "handwritten_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_vec_layernorm_32x32/original/manifest.json",
+        "sha256": "ae219c9c8ca9c9f1ce3393dbc3177edbe5d092235ec007da2e45926c16b8fd5a"
+      },
+      "current_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_vec_layernorm_32x32/previous/manifest.json",
+        "sha256": "94bc4ae4a2a26e824167253b421b460aadbe68dfe00eb949ac311b1f98c83fdf"
+      },
+      "scope": "Each pair shares its host and launch edge. Capacity changes host programming/layout and memory-system conditions between pairs; this is not a compiler-version regression.",
+      "input_priority_edges": 4830,
+      "input_priority_replay": {
+        "path": "build/rtlgraph-corpus-current/matrix-1/perf_vec_layernorm_32x32/input-priority-64/manifest.json",
+        "sha256": "4e9de5358c274ddb3ecf31f6ef31c225b56f3281643b6bd01a8dcd3eb8325356"
+      }
+    }
+  },
+  "post_execution_audits": {
+    "driver": {
+      "path": "scripts/rtlgraph_perf.py",
+      "sha256": "d7cb137f92bd6a2028f891100ba2beeccc07b55f54e872141769ad01845dfb70"
+    },
+    "replays_checked": 29,
+    "issued_pc_words_checked": 5055,
+    "all_matched": true
+  },
+  "reproduced_optional_candidates": {
+    "input-priority-identity.json": {
+      "path": "build/rtlgraph-corpus-current/matrix-1/input-priority-identity.json",
+      "sha256": "83252bd4e3b78e8afbb8a70f9d1788ffc7dc145507a802e5eadc1a9bbe01e9a1"
+    },
+    "dma-only-identity.json": {
+      "path": "build/rtlgraph-corpus-current/matrix-1/dma-only-identity.json",
+      "sha256": "c634584ab62db53a4cbba79c60d7d5ceb1f089278bb61e3aaaabefcf686e0c1e"
+    },
+    "layernorm-input-priority.json": {
+      "path": "build/rtlgraph-corpus-current/matrix-1/layernorm-input-priority.json",
+      "sha256": "d27461c42925057955ef39f5dabc36235bb8dc56f666ec5f59962702d7a17f8d"
+    }
+  },
+  "actual_rtl_executions": 29,
+  "golden_word_comparisons": 35328,
+  "current_vs_previous_identical_streams": 11,
+  "detailed_local_record": {
+    "path": "build/rtlgraph-corpus-current/matrix-1/full-results.json",
+    "sha256": "8023c4f7809dd3e35c7f0973446211a43c5a50b43862635a90c771f7a776644c"
+  },
+  "artifact_paths_relative_to": "atlas-compiler repository root; external paths are absolute",
+  "baremetal_root": "/bwrcq/C/reednicolas/ee194-sp26-chipyard/generators/sp26-atlas-acc/baremetal"
+}
