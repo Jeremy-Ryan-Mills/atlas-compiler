@@ -1,182 +1,74 @@
 # atlas-rtlgraph: deriving an instruction scheduling model from RTL
 
-Updated 2026-09-30. This document describes the durable design and current
-boundary of the RTL-graph work. The detailed extraction scripts, mutation tests,
-replay commands, and chronological evidence remain available at
-[`dd7342c`](https://github.com/Jeremy-Ryan-Mills/atlas-compiler/tree/dd7342ce6a3c4d051544bf719086edb59cb80765).
-
-The goal is to derive the timing and hazard information a compiler needs from a
-pinned hardware configuration: when an instruction reads and writes each
-operand, which resources it occupies, which launch conditions must hold, and
-which completion events cannot be represented by a fixed latency. The resulting
-lookup tables concern instruction scheduling, not FPGA lookup-table cells.
+Updated 2026-09-30. RTL-graph derives the timing and hazard information a compiler needs from a pinned hardware configuration: operand reads and writes, resource occupancy, launch conditions, and completion events. Its lookup tables describe instruction scheduling, not FPGA cells. [The model guide](../../docs/rtlgraph-model.md) records profile semantics, measured results, and limits; earlier experiments remain at [`dd7342c`](https://github.com/Jeremy-Ryan-Mills/atlas-compiler/tree/dd7342ce6a3c4d051544bf719086edb59cb80765).
 
 ## Current checkpoint
 
-The extraction and validation target is `chipyard.EE290SimConfig`, selected by
-the Atlas baremetal Makefile through `chipyard.harness.TestHarness`. It composes
-the Atlas tile with the course Chipyard, Shuttle, Saturn, TestChipIP, and Rocket
-Chip revisions recorded by the enclosing checkout's `.gitmodules`. Artifacts
-from `AtlasShuttleVectorConfig` are historical and are not mixed with this
-profile.
+The target is `chipyard.EE290SimConfig`, selected by the Atlas baremetal Makefile through `chipyard.harness.TestHarness`. Its current public definition is in [bringup-chipyard](https://github.com/ucb-ee194-tapeout/bringup-chipyard), at [`EE290Configs.scala`](https://github.com/ucb-ee194-tapeout/bringup-chipyard/blob/main/generators/chipyard/src/main/scala/EE290Configs.scala#L13-L26). This is a source reference, not a claim that moving `main` reproduces the checked-in profiles: their recorded revisions, elaboration inputs, and CIRCT artifact hash identify the analyzed hardware. Historical `AtlasShuttleVectorConfig` artifacts are not mixed with these profiles.
 
-Fresh elaboration and CIRCT verification produced one shared hardware-IR
-identity. Typed structural analyses and finite RTL traces support six optional
-partial profiles:
+Fresh elaboration and CIRCT verification produced one shared hardware-IR identity. Typed structural analyses and finite executions support six optional partial profiles:
 
 | Profile | Derived compiler-facing facts |
 | --- | --- |
-| MXU0 | First accumulator write is age 63; overwrite-only `VMATMUL.MXU0` does not reserve an accumulator read |
-| MXU1 | First accumulator write is age 3; overwrite-only `VMATMUL.MXU1` does not reserve an accumulator read |
-| DMA | Operands and configuration are captured at issue; completion is released by explicit `DMA.WAIT`; configured 37-bit DRAM ranges and VMEM/bank constraints are tracked |
-| LSU | Vector read/write/free ages 1/3/35; scalar memory request age 1 and writeback/next-load acceptance age 3 |
-| XLU | Under idle entry and one-cycle MREG responses, `VTRPOSE.XLU` reads at ages 1–32, writes at 34–65, and first releases the engine at age 66; connected routing checks the byte transpose; frontend assertions enforce read/write reservation release ages 33/65 |
+| MXU0 | First accumulator write at age 63; overwrite-only `VMATMUL.MXU0` does not reserve an accumulator read |
+| MXU1 | First accumulator write at age 3; overwrite-only `VMATMUL.MXU1` does not reserve an accumulator read |
+| DMA | Issue-time operand/configuration capture, explicit `DMA.WAIT` completion, 37-bit DRAM ranges, and VMEM/bank constraints |
+| LSU | Vector read/write/free ages 1/3/35; scalar memory request at age 1 and writeback/next-load acceptance at age 3 |
+| XLU | `VTRPOSE.XLU` reads at 1–32, writes at 34–65, and first releases the engine at 66; connected frontend checks retain logical reservation release ages 33/65 |
 | VPU | Access timing for 29 implemented commands, with 841 ordered-pair control overlap checks |
 
-The checked-in projections and evidence are under
-`profiles/EE290SimConfig/{mxu0,mxu1,dma,lsu,xlu,vpu}/`. Their loaders reject malformed
-fields and refuse to compose profiles from different hardware IR. Unselected
-rules retain the compiler's built-in behavior.
+The projections and evidence live under `profiles/EE290SimConfig/{mxu0,mxu1,dma,lsu,xlu,vpu}/`. Loaders reject malformed fields and mixed hardware identities. Unselected rules retain built-in behavior. Historical full-output RTL runs cover eleven `perf_*.S` kernels; the strongest controlled results reduce fused-attention first-issue-to-completion time from 24,932 to 22,132 edges on MXU1 and 25,445 to 22,132 on MXU0. These are finite witnesses, not universal speedup or safety proofs.
 
-The scheduler has been validated on the eleven `perf_*.S` kernels with full
-output goldens. The strongest controlled result reduces fused-attention
-first-issue-to-completion time from 24,932 to 22,132 edges on MXU1 and from
-25,445 to 22,132 on MXU0. These are finite executions under shared per-kernel
-hosts, not universal speedup or safety proofs. The [model guide](../../docs/rtlgraph-model.md)
-records the exact profile semantics, results, and limitations.
-
-## Representations and consumers
+## Lowering and consumers
 
 ```text
-EE290SimConfig + pinned sources + environment assumptions
-    -> elaborated CIRCT HW/Comb/Seq
-    -> structural and temporal queries + evidence ledger
-    -> resource/timing graph and instruction profiles
-    -> atlas-opt + concrete operands and addresses
-    -> kernel dependencies + resource reservations
-    -> checked schedule
+EE290SimConfig + pinned Chisel sources + elaboration inputs
+    -> Chisel elaboration -> FIRRTL -> firtool
+    -> CIRCT HW/Comb/Seq, with remaining SV constructs
+    -> typed structural and bounded control queries + evidence
+    -> operand access profiles, resource holds, completion rules
+    -> atlas-opt + kernel operands and addresses
+    -> dependency graph + reservation table -> checked schedule
 ```
 
-The hardware resource-timing graph contains storage, ports, engines, queues,
-state, guards, and event timing. Instruction profiles project those facts into
-operand-dependent accesses and resource holds. An instruction interaction graph
-is useful for inspection, but pairwise distances alone cannot express bank
-selection, repeated row accesses, alternative ports, capacity, or variable
-completion. The concrete kernel graph and reservation table remain the scheduling
-consumer.
+Extraction follows module connections, def-use chains, enables, counters, and state transitions in elaborated hardware. Counting pipeline registers alone cannot establish acceptance, arbitration, or variable-latency completion. The hardware resource-timing graph is the conceptual analysis model; the retained implementation uses targeted typed queries and per-unit profiles, not a complete automatically recovered machine description. [CIRCT's dialect documentation](https://circt.llvm.org/docs/Dialects/) describes the underlying IR.
 
-The existing compiler interface is the compatibility target:
+The compiler interface remains the compatibility target:
 
 | Representation | Required meaning |
 | --- | --- |
-| `Access` | Storage identity, range, read/write direction, start age, row step, unknown-address aliasing, and completion lifetime |
-| `Hold` | Resource identity and inclusive occupancy interval, including alternative resources |
-| `Footprint` | An instruction's accesses, holds, logical reservations, release ages, and completion estimates |
-| Dependency rules | RAW/WAR/WAW timing, logical-register lifetimes, sequencer rules, and explicit completion edges |
-| `ReservationTable` | Physical MREG ports, VMEM banks, engine capacities, VPU slots, and reservations widened across DMA waits |
+| `Access` | Storage identity/range, direction, age, row step, unknown-address aliasing, and completion lifetime |
+| `Hold` | Resource identity and inclusive occupancy, including alternative resources |
+| `Footprint` | Accesses, holds, logical reservations, release ages, and completion estimates |
+| Dependency rules | RAW/WAR/WAW timing, sequencer rules, logical lifetimes, and explicit completion edges |
+| `ReservationTable` | Physical MREG ports, VMEM banks, engine/VPU capacities, and reservations widened across DMA waits |
 
-Profiles must be instantiated with actual operands and known scalar values.
-Logical identity and physical contention are separate: for example, `m0` and
-`m32` name different logical rows in the same MREG bank. Read-after-read creates
-no data edge, while simultaneous reads may still conflict on a port.
+Profiles instantiate actual operands and known scalar values. Logical identity and physical contention differ: `m0` and `m32` are distinct logical registers sharing a physical bank. Read-after-read creates no data edge, but simultaneous reads can conflict on a port. Pairwise minimum distances cannot express every row stream, capacity constraint, or isolated forbidden issue gap.
 
 ## Evidence policy
 
-Every admitted fact must identify its configuration, hardware IR, extraction
-tool, assumptions, and unsupported cases. Evidence categories are deliberately
-distinct:
+Every admitted fact identifies hardware configuration, IR, tools, assumptions, and unsupported cases. Structural derivation, exhaustive local Boolean checks, finite simulation, bounded temporal reasoning, and inherited compiler rules remain distinct. A successful trace demonstrates its inputs and environment. Passing the scheduler's own checker establishes consistency with the selected model, not independent RTL correctness.
 
-- structural derivation follows typed CIRCT definitions, uses, hierarchy, and
-  state-update cones;
-- exhaustive local checks enumerate a bounded Boolean or bit-vector function;
-- finite traces demonstrate a particular accepted execution and bind events to
-  instruction identities;
-- bounded temporal checks establish only the stated initial state, bound, and
-  environment assumptions;
-- inherited rules remain compiler assumptions and are not relabeled as RTL
-  results.
-
-A passing witness does not prove all states or interference patterns. A compiler
-schedule passing its own checker establishes consistency with the selected model,
-not independent RTL correctness. Numerical goldens and RTL event checks remain
-separate obligations.
-
-The current LSU proof illustrates the boundary. It checks operand capture,
-32-row progression, bank/address selection, all payload bits, response routing,
-destination write ports, and path release under idle entry, legal aligned
-nonwrapping addresses, one-cycle memory response, and explicit arbitration
-exclusions. It does not establish arbitrary simultaneous traffic, same-row
-read/write visibility, scalar issue legality, or whole-kernel safety. DMA has no
-fixed off-chip completion bound; correctness uses the matching `DMA.WAIT`.
+For example, the vector LSU analysis checks capture, row/bank/address progression, all payload bits, response routing, write ports, and release under idle entry, legal aligned nonwrapping addresses, one-cycle response, and arbitration exclusions. It does not establish arbitrary interfering traffic or same-row read/write visibility. Connected XLU datapath overlap is numerically possible before logical release, but frontend assertions prohibit it; the compiler preserves those reservations. Off-chip DMA has no fixed correctness bound and requires the matching `DMA.WAIT`.
 
 ## Integration boundary
 
-`atlas-opt` accepts the six profiles independently and composes them only when
-their hardware identity matches. It continues to build `Access`, `Hold`, and
-`Footprint` objects and uses the existing dependency graph, list scheduler,
-reservation table, and final checker. The optional `insert-dma-waits` pass adds
-matching waits using the selected model's capture and memory rules. DMA lifetimes
-may cross known control-flow edges; fixed-latency engines still drain at block
-boundaries. `# atlas.release` marks publication.
+`atlas-opt` composes profiles only when their hardware identities match. Its existing dependency graph, list scheduler, reservation table, and checker consume the resulting footprints. The optional [model-aware DMA wait pass](../../docs/rtlgraph-dma-integration.md) handles known control-flow edges, joins, and loops; fixed-latency engines still drain at block boundaries. `# atlas.release` marks publication. The functional parser on the separate [`insert-dma-waits` branch](https://github.com/Jeremy-Ryan-Mills/atlas-compiler/tree/insert-dma-waits) remains a future convergence task.
 
-The [assembly and timing handoff](../../docs/rtlgraph-contract.md) packages an
-emitter's `before.S`, selected profiles and evidence, operand-resolved
-footprints, and compiler identity. This gives Merlin a usable boundary today:
-Merlin can emit operations and buffer assignments, then invoke `atlas-opt` for
-dependency and resource scheduling. A future native Merlin consumer should
-retain row accesses, bank and port occupancy, capacities, and completion events
-rather than collapsing them into mnemonic-level gaps.
+The [assembly/timing handoff](../../docs/rtlgraph-contract.md) packages `before.S`, profiles, evidence, resolved footprints, and compiler identity for an external consumer. A future [Merlin](https://github.com/ucb-bar/merlin) adapter could preserve these as Phase 0 evidence, invoke an optional Atlas scheduling/checking step, and retain profile identity with performance measurements. No Merlin integration is implemented here. A native consumer should retain row accesses, ports, capacities, and completion events instead of flattening them into mnemonic gaps.
 
-The newer functional assembly parser on `insert-dma-waits` remains a separate
-branch-integration task. Selected-model wait placement, captured operands,
-DRAM ranges, channel/ring reuse and CFG lifetimes are now implemented here
-without changing native assembly syntax. See the
-[DMA integration guide](../../docs/rtlgraph-dma-integration.md).
+## External references and portability
 
-## External references
+- The enclosing [`.gitmodules`](https://github.com/ucb-ee194-tapeout/bringup-chipyard/blob/main/.gitmodules) identifies course forks of [TestChipIP](https://github.com/ucb-ee194-tapeout/testchipip), [Saturn `bf16_fp8`](https://github.com/ucb-ee194-tapeout/saturn-vectors/tree/bf16_fp8), [Shuttle](https://github.com/ucb-ee194-tapeout/shuttle), and [Rocket Chip](https://github.com/ucb-ee194-tapeout/rocket-chip). Evidence records actual gitlinks, not only tracking branches.
+- The compiler baseline references [`npu_model`'s `rtl-match` branch](https://github.com/ucb-ee194-tapeout/npu_model/tree/rtl-match) and its [timing notes](https://github.com/ucb-ee194-tapeout/npu_model/blob/rtl-match/docs/rtl-timing.md).
+- Merlin is an optional reference, not a build dependency; the handoff comparison is pinned to [`81a585b`](https://github.com/ucb-bar/merlin/tree/81a585b857838baeba35bc55eab7db10525db7cb).
+- [Radiance](https://github.com/ucb-bar/radiance) and its [Muon design](https://github.com/ucb-bar/radiance/blob/main/docs/muon.md) are potential targets for warp context, register mapping, occupancy, operand collection, and hardware-enforced hazards.
+- [Vortex](https://github.com/vortexgpgpu/vortex), its [microarchitecture](https://github.com/vortexgpgpu/vortex/blob/master/docs/designs/microarchitecture.md), and [scoreboard](https://github.com/vortexgpgpu/vortex/blob/master/hw/rtl/core/VX_scoreboard.sv) provide a SystemVerilog portability target. A small slice through [CIRCT's SystemVerilog frontend](https://circt.llvm.org/docs/Tools/circt-verilog/) would test feasibility before a full import.
 
-- The enclosing `.gitmodules` supplies the target's course forks:
-  [TestChipIP](https://github.com/ucb-ee194-tapeout/testchipip),
-  [Saturn `bf16_fp8`](https://github.com/ucb-ee194-tapeout/saturn-vectors/tree/bf16_fp8),
-  [Shuttle](https://github.com/ucb-ee194-tapeout/shuttle), and
-  [Rocket Chip](https://github.com/ucb-ee194-tapeout/rocket-chip). Branch names
-  are tracking choices; evidence must record the actual parent gitlinks.
-- The compiler baseline comes from [`npu_model`'s `rtl-match` branch](https://github.com/ucb-ee194-tapeout/npu_model/tree/rtl-match),
-  including its [timing notes](https://github.com/ucb-ee194-tapeout/npu_model/blob/rtl-match/docs/rtl-timing.md).
-- Merlin is an optional reference and future richer consumer, not a build
-  dependency. The inspected comparison point is
-  [`ucb-bar/merlin@81a585b`](https://github.com/ucb-bar/merlin/tree/81a585b857838baeba35bc55eab7db10525db7cb).
-- [Radiance](https://github.com/ucb-bar/radiance) and its
-  [Muon design](https://github.com/ucb-bar/radiance/blob/main/docs/muon.md) are
-  portability targets for warp context, register mapping, occupancy, operand
-  collection, and hardware-enforced hazards.
-- [Vortex](https://github.com/vortexgpgpu/vortex) provides a SystemVerilog
-  portability target; its [microarchitecture](https://github.com/vortexgpgpu/vortex/blob/master/docs/designs/microarchitecture.md)
-  and [scoreboard](https://github.com/vortexgpgpu/vortex/blob/master/hw/rtl/core/VX_scoreboard.sv)
-  expose readiness, operand collection, execution, and commit behavior.
-
-The reusable component is the typed-query and evidence framework, not one Atlas
-latency table. Radiance/Muon and Vortex must supply their own instruction
-identity, acceptance, completion, resource, warp, and hardware-stall semantics.
-For Vortex, begin with a small scoreboard/operand-collector slice through the
-[CIRCT SystemVerilog frontend](https://circt.llvm.org/docs/Tools/circt-verilog/).
+The reusable component is the query/evidence framework. Each target needs its own instruction identity, acceptance, completion, resource, warp, and stall semantics. A rule can constrain legal software issue on Atlas while predicting a hardware stall elsewhere.
 
 ## Next milestone
 
-The present branch is a coherent partial-model milestone. The next work should:
+The immediate milestone is an updated full-output kernel regression, real-kernel DMA-wait validation, and a smaller reviewable compiler branch. [The review notes](../../docs/rtlgraph-review.md) track findings and distinguish measured outcomes from proposed work.
 
-1. extend the connected command/overlap checks to broader frontend and resource
-   interference; current XLU assertions prevent a datapath-only overlap from
-   becoming an invalid schedule;
-2. replace remaining inherited timing rules only when evidence is strong enough
-   to change correctness scheduling;
-3. feed a small MLP or attention kernel emitted by Merlin through the existing
-   handoff, `atlas-opt`, RTL replay, and numerical validation;
-4. define a versioned complete machine schema before replacing the current
-   component-specific loaders; and
-5. establish simulator build provenance and add scoped formal properties
-   where finite traces are insufficient.
-
-Complete whole-hardware timing proof, arbitrary variable-latency bounds, direct
-Merlin model consumption, and full Radiance/Vortex imports remain outside this
-milestone.
+After that, extend frontend/interference coverage and replace remaining inherited rules only where evidence supports the change. Define a versioned complete machine schema before replacing component loaders. Fresh simulator build provenance remains deferred. Whole-hardware proofs, arbitrary variable-latency bounds, Merlin implementation, and full Radiance/Vortex imports are outside this checkpoint.

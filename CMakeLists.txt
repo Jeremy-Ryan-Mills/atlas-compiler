@@ -50,9 +50,6 @@ add_executable(dma-wait-tests tests/dma_wait_tests.cpp)
 target_link_libraries(dma-wait-tests atlas)
 add_test(NAME dma-wait-tests COMMAND dma-wait-tests)
 
-add_executable(rtlgraph-instruction-overlap EXCLUDE_FROM_ALL scripts/tests/rtlgraph_instruction_overlap.cpp)
-target_link_libraries(rtlgraph-instruction-overlap atlas)
-
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
   add_test(NAME footprint-dump-tests COMMAND ${Python3_EXECUTABLE}

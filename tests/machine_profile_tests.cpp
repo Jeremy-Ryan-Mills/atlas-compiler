@@ -37,7 +37,17 @@ static Code schedule(const AsmProgram& program, const MachineModel& model) {
     return code;
 }
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc == 2 && std::string(argv[1]) == "--vpu-overlap") {
+        std::string a, b;
+        while (std::cin >> a >> b) {
+            auto x = findOp(a), y = findOp(b);
+            if (!x || !y) return 2;
+            std::cout << vpuCanOverlap(*x, *y) << '\n';
+        }
+        return 0;
+    }
+    if (argc != 1) return 2;
     const auto temporary = std::filesystem::temp_directory_path() /
         ("atlas-profile-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     try {

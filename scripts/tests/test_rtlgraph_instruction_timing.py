@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Mutation checks for typed hierarchical control extraction."""
+import argparse
+import json
 from pathlib import Path
+import subprocess
 import sys
 import unittest
 
@@ -126,5 +129,32 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(build(m).cycle({})['out'], 0)
 
 
+def check_native_overlap(probe, evidence):
+    profile = json.loads((evidence / 'vpu' / 'profile.json').read_text())
+    pairs = json.loads((evidence / 'vpu-overlap.json').read_text())
+    names = {n: 'v'+n+'.bf16' for n in ('add', 'sub', 'mul', 'sqrt', 'sin', 'cos', 'tanh', 'exp', 'exp2', 'square', 'cube', 'relu')}
+    names.update(rcp='vrecip.bf16', log='vlog2.bf16', rsum='vredsum.row.bf16', rmax='vredmax.row.bf16',
+                 rmin='vredmin.row.bf16', csum='vredsum.bf16', cmax='vredmax.bf16', cmin='vredmin.bf16',
+                 fp8pack='vpack.bf16.fp8', fp8unpack='vunpack.fp8.bf16', pairmax='vmaximum.bf16',
+                 pairmin='vminimum.bf16', mov='vmov', vliOne='vli.one', vliCol='vli.col', vliRow='vli.row', vliAll='vli.all')
+    commands = ''.join(names[p['first']]+' '+names[p['second']]+'\n' for p in pairs)
+    actual = [int(x) for x in subprocess.check_output([str(probe.resolve()), '--vpu-overlap'], input=commands, text=True).split()]
+    if len(actual) != len(pairs) or len({(p['first'], p['second']) for p in pairs}) != len(names)**2:
+        raise SystemExit('Incomplete command-pair comparison')
+    for pair, native in zip(pairs, actual):
+        expected = pair['gap'] < profile['instructions'][pair['first']]['write_release']
+        if native not in (0, 1) or bool(native) != expected:
+            raise SystemExit(f'Native overlap mismatch: {pair}, native={native}')
+    print(f'All {len(actual)} native VPU overlap decisions match typed engine issue masks.')
+
+
 if __name__ == '__main__':
-    unittest.main()
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--native-probe', type=Path)
+    parser.add_argument('--evidence', type=Path)
+    args, remaining = parser.parse_known_args()
+    if bool(args.native_probe) != bool(args.evidence):
+        parser.error('--native-probe and --evidence must be used together')
+    if args.native_probe:
+        check_native_overlap(args.native_probe, args.evidence)
+    unittest.main(argv=[sys.argv[0], *remaining])
