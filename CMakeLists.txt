@@ -46,6 +46,10 @@ add_executable(rtl-dma-tests tests/rtl_dma_tests.cpp)
 target_link_libraries(rtl-dma-tests atlas)
 add_test(NAME rtl-dma-tests COMMAND rtl-dma-tests)
 
+add_executable(dma-wait-tests tests/dma_wait_tests.cpp)
+target_link_libraries(dma-wait-tests atlas)
+add_test(NAME dma-wait-tests COMMAND dma-wait-tests)
+
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
   add_test(NAME footprint-dump-tests COMMAND ${Python3_EXECUTABLE}

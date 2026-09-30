@@ -23,10 +23,12 @@ struct Pass {
 // Every pass, in the order they run.
 const std::vector<Pass>& allPasses();
 
-// Runs the named passes in registry order (every pass if `names` is empty).
+// Runs named passes in registry order. Empty names select the standard passes;
+// insert-dma-waits is opt-in.
 void runPasses(Code& code, const std::vector<std::string>& names, PassContext& ctx);
 
 // The passes (one .cpp file each).
 void stripArtifacts(Code& code, PassContext& ctx);
+void insertDmaWaits(Code& code, PassContext& ctx);
 void fillDelaySlots(Code& code, PassContext& ctx);
 void schedule(Code& code, PassContext& ctx);

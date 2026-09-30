@@ -5,13 +5,17 @@
 void fillDelaySlots(Code& code, PassContext& ctx) {
     std::vector<RegValues> entry = blockEntryValues(code, ctx.model.rtlDmaRanges);
     uint32_t dmaRegs = dmaOperandRegisters(flatten(code).instrs);
+    DmaFlow flow;
+    if (ctx.model.rtlDma) flow = analyzeDmaFlow(code, ctx.model);
     int filled = 0;
     for (size_t bi = 0; bi < code.blocks.size(); bi++) {
         Block& b = code.blocks[bi];
         if (!hasDelaySlot(b) || b.slot) continue;
         std::vector<Instr> nodes = b.body;
         nodes.push_back(*b.terminator);
-        DepGraph g = buildGraph(nodes, entry[bi], dmaRegs, ctx.model);
+        IncomingDma incoming;
+        if (ctx.model.rtlDma) incoming = {flow.before[bi].front(), &flow.commands};
+        DepGraph g = buildGraph(nodes, entry[bi], dmaRegs, ctx.model, ctx.model.rtlDma ? &incoming : nullptr);
         // The slot runs after the branch on both paths, so take the latest plain scalar
         // instruction that nothing after it depends on (not even the branch).
         for (int i = (int)b.body.size() - 1; i >= 0; i--) {

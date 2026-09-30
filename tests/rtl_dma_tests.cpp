@@ -220,15 +220,14 @@ int main() {
         rejectsSimulation(setup + "vstore m0, 0(x4)\ndma.store.ch0 x1, x4, x2\ndma.wait.ch0\n",
                           "is still accessing", rtlModel(), 100.0);
 
-        Code unsupported = buildBlocks(parseAsm(load + "later:\ndma.wait.ch0\n"));
+        Code crossBlock = buildBlocks(parseAsm(load + "later:\ndma.wait.ch0\n"));
         PassContext rtlContext;
         rtlContext.model = rtlModel();
-        bool rejectedBoundary = false;
-        try { runPasses(unsupported, {"schedule"}, rtlContext); }
-        catch (const std::runtime_error& error) {
-            rejectedBoundary = std::string(error.what()).find("block boundaries") != std::string::npos;
-        }
-        check(rejectedBoundary, "native admission accepted a DMA lifetime across block boundaries");
+        runPasses(crossBlock, {"schedule"}, rtlContext);
+        SimOptions crossOptions;
+        crossOptions.model = rtlModel();
+        check(simulate(flatten(crossBlock), crossOptions).violations.empty(),
+              "native scheduling rejected a guarded DMA lifetime across blocks");
 
         auto legacySimulation = simulate(parseAsm("addi x2, x0, 32\ndma.load.ch0 x0, x0, x2\ndelay 100\nnop\necall\n"));
         check(legacySimulation.violations.empty(), "legacy DMA completion behavior changed");

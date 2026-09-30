@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <climits>
 #include <sstream>
+#include <stdexcept>
 
 static int criticalPathLength(const DepGraph& g) {
     std::vector<int> h = criticalHeights(g);
@@ -47,7 +48,8 @@ static bool isScheduleArtifact(const Instr& in) {
 }
 
 static GraphView makeView(const std::vector<Instr>& seq, const std::vector<int>& seqCycles,
-                          const RegValues& entry, int length, uint32_t dmaRegs, const MachineModel& model) {
+                          const RegValues& entry, int length, uint32_t dmaRegs, const MachineModel& model,
+                          const IncomingDma* incoming, bool allowInvalid = false) {
     GraphView v;
     std::vector<Instr> nodes;
     for (size_t i = 0; i < seq.size(); i++) {
@@ -55,7 +57,20 @@ static GraphView makeView(const std::vector<Instr>& seq, const std::vector<int>&
         nodes.push_back(seq[i]);
         v.cycles.push_back(seqCycles[i]);
     }
-    v.graph = buildGraph(nodes, entry, dmaRegs, model);
+    try {
+        v.graph = buildGraph(nodes, entry, dmaRegs, model, incoming);
+    } catch (const std::runtime_error& error) {
+        if (!allowInvalid) throw;
+        v.diagnostic = "Dependency edges unavailable: " + std::string(error.what());
+        v.graph.nodes = nodes;
+        RegValues regs = entry;
+        for (const Instr& in : nodes) {
+            v.graph.footprints.push_back(footprintOf(in, regs, model));
+            applyScalar(in, regs);
+        }
+        v.graph.in.resize(nodes.size());
+        v.graph.out.resize(nodes.size());
+    }
     v.redundant = redundantEdges(v.graph);
     v.length = length;
     return v;
@@ -72,8 +87,20 @@ ProgramView buildProgramView(const std::string& source, const AsmProgram& origin
     std::vector<RegValues> entryOpt = blockEntryValues(optimized, model.rtlDmaRanges);
     uint32_t dmaRegs = dmaOperandRegisters(original.instrs);
 
-    for (size_t bi = 0; bi < orig.blocks.size() && bi < optimized.blocks.size(); bi++) {
-        const Block& ob = orig.blocks[bi];
+    DmaFlow originalFlow, optimizedFlow;
+    if (model.rtlDma) {
+        originalFlow = analyzeDmaFlow(orig, model);
+        optimizedFlow = analyzeDmaFlow(optimized, model);
+    }
+    for (size_t bi = 0; bi < optimized.blocks.size(); bi++) {
+        const Block empty;
+        const Block& ob = bi < orig.blocks.size() ? orig.blocks[bi] : empty;
+        IncomingDma incomingOriginal, incomingOptimized;
+        if (model.rtlDma) {
+            incomingOriginal = {bi < orig.blocks.size() ? originalFlow.before[bi].front() : PendingDma{},
+                                &originalFlow.commands};
+            incomingOptimized = {optimizedFlow.before[bi].front(), &optimizedFlow.commands};
+        }
         BlockView bv;
         bv.name = ob.labels.empty() ? "block " + std::to_string(bi) : ob.labels[0];
         if (bi == 0 && ob.labels.empty()) bv.name = "entry";
@@ -81,8 +108,9 @@ ProgramView buildProgramView(const std::string& source, const AsmProgram& origin
         std::vector<Instr> seq = blockInstructions(ob);
         std::vector<int> cycles = asWrittenCycles(seq);
         int length = seq.empty() ? 0 : cycles.back() + naturalGap(seq.back());
-        bv.before = makeView(seq, cycles, entryOrig[bi], length, dmaRegs, model);
-        bv.lowerBound = criticalPathLength(bv.before.graph);
+        bv.before = makeView(seq, cycles, bi < orig.blocks.size() ? entryOrig[bi] : unknownRegs(),
+                             length, dmaRegs, model, model.rtlDma ? &incomingOriginal : nullptr, true);
+        bv.lowerBound = bv.before.diagnostic.empty() ? criticalPathLength(bv.before.graph) : 0;
 
         const Block& nb = optimized.blocks[bi];
         std::vector<Instr> seq2 = blockInstructions(nb);
@@ -93,7 +121,8 @@ ProgramView buildProgramView(const std::string& source, const AsmProgram& origin
             if (hasDelaySlot(nb)) cycles2.push_back(nb.terminatorCycle + 1);
         }
         length = nb.scheduled ? nb.endCycle : seq2.empty() ? 0 : cycles2.back() + naturalGap(seq2.back());
-        bv.after = makeView(seq2, cycles2, entryOpt[bi], length, dmaRegs, model);
+        bv.after = makeView(seq2, cycles2, entryOpt[bi], length, dmaRegs, model,
+                            model.rtlDma ? &incomingOptimized : nullptr);
         view.blocks.push_back(bv);
     }
     return view;
@@ -118,7 +147,7 @@ static std::string js(const std::string& s) {
 
 
 static void writeGraph(std::ostringstream& o, const GraphView& v) {
-    o << "{\"length\":" << v.length << ",\"nodes\":[";
+    o << "{\"length\":" << v.length << ",\"diagnostic\":" << js(v.diagnostic) << ",\"nodes\":[";
     for (size_t i = 0; i < v.graph.nodes.size(); i++) {
         const Instr& in = v.graph.nodes[i];
         o << (i ? "," : "") << "[" << js(formatInstr(in)) << "," << in.line << "," << (int)in.op->engine << ","
@@ -328,8 +357,8 @@ function render() {
   const blk = DATA.blocks[state.block];
   state.selected = null;
   $("details").innerHTML = HINT;
-  $("len-before").textContent = `${fmt(blk.before.length)} cycles`;
-  $("len-after").textContent = `${fmt(blk.after.length)} cycles · critical path ${fmt(blk.lb)}`;
+  $("len-before").textContent = blk.before.diagnostic || `${fmt(blk.before.length)} cycles`;
+  $("len-after").textContent = `${fmt(blk.after.length)} cycles` + (blk.before.diagnostic ? "" : ` · critical path ${fmt(blk.lb)}`);
   const lanes = ENGINES.map(() => 0);
   [blk.before, blk.after].forEach(g => g.nodes.forEach(n => { lanes[n[2]] = 1; }));
   drawPanel("before", blk.before, blk.after, lanes);

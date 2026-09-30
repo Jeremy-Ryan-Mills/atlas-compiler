@@ -2,6 +2,7 @@
 #include <stdexcept>
 
 #include "passes/pass.h"
+#include "core/dma_flow.h"
 
 namespace {
 
@@ -92,30 +93,11 @@ void validateReleaseDma(const Code& code, const MachineModel& model) {
     }
 }
 
-// The first native RTL projection requires every transfer's completion guard
-// inside its launch block. This admits loops with idle DMA at their boundaries
-// without pretending the block-local scheduler tracks pending work through CFG joins.
 void validateRtlDma(const Code& code, const PassContext& ctx) {
     if (!ctx.model.rtlDma) return;
     if (!ctx.robustDma)
         throw std::runtime_error("RTL DMA scheduling requires robust variable-wait reservations");
-    for (const Block& block : code.blocks) {
-        if (block.slot && block.slot->op->engine == Engine::Dma)
-            throw std::runtime_error("RTL DMA commands in branch delay slots are not supported");
-        unsigned pending = 0;
-        visitInstructions(block, [&](const Instr& in) {
-            if (dmaCommand(in, ctx.model) && (pending & (1u << in.op->channel)))
-                throw std::runtime_error("line " + std::to_string(in.line) +
-                                         ": RTL DMA channel reused before an explicit matching wait");
-            if (in.release && pending)
-                throw std::runtime_error("line " + std::to_string(in.line) +
-                                         ": atlas.release has pending RTL DMA; an explicit wait is required");
-            pending = dmaAfter(in, pending, ctx.model);
-        });
-        if (pending)
-            throw std::runtime_error("RTL DMA requires a matching explicit wait in the same block; "
-                                     "pending DMA across block boundaries is not supported");
-    }
+    validateDmaFlow(code, ctx.model);
 }
 
 }  // namespace
@@ -125,6 +107,7 @@ const std::vector<Pass>& allPasses() {
     // and delays for whatever the earlier passes produced.
     static const std::vector<Pass> passes = {
         {"strip-artifacts", "remove the old schedule: delays and no-op fillers", stripArtifacts},
+        {"insert-dma-waits", "insert selected-model DMA completion guards (opt-in)", insertDmaWaits},
         {"fill-delay-slots", "move an independent scalar instruction into each empty branch delay slot", fillDelaySlots},
         {"schedule", "list-schedule every block and choose the delays", schedule},
     };
@@ -133,10 +116,12 @@ const std::vector<Pass>& allPasses() {
 
 void runPasses(Code& code, const std::vector<std::string>& names, PassContext& ctx) {
     bool stripsArtifacts = names.empty(), schedules = names.empty(), hasRelease = false;
+    bool insertingWaits = false;
     int firstReleaseLine = 0;
     for (const std::string& name : names) {
         stripsArtifacts |= name == "strip-artifacts";
         schedules |= name == "schedule";
+        insertingWaits |= name == "insert-dma-waits";
     }
     for (const Block& block : code.blocks)
         visitInstructions(block, [&](const Instr& in) {
@@ -159,6 +144,8 @@ void runPasses(Code& code, const std::vector<std::string>& names, PassContext& c
         if (b.terminator) validate(*b.terminator);
         if (b.slot) {
             validate(*b.slot);
+            if ((ctx.model.rtlDma || insertingWaits) && b.slot->op->engine == Engine::Dma)
+                throw std::runtime_error("DMA commands in branch delay slots are not supported");
             OpClass slotClass = b.slot->op->opClass;
             // Only stripped delays are safe in branch slots.
             bool retainedDelay = slotClass == OpClass::Delay && (b.slot->keep || !stripsArtifacts);
@@ -172,20 +159,23 @@ void runPasses(Code& code, const std::vector<std::string>& names, PassContext& c
         for (const Pass& p : allPasses()) known |= name == p.name;
         if (!known) throw std::runtime_error("unknown pass '" + name + "'");
     }
-    validateRtlDma(code, ctx);
+    if (!insertingWaits) validateRtlDma(code, ctx);
     if (hasRelease) {
         if (!schedules)
             throw std::runtime_error("line " + std::to_string(firstReleaseLine) +
                                      ": atlas.release requires the schedule pass");
-        validateReleaseDma(code, ctx.model);
+        if (!insertingWaits) validateReleaseDma(code, ctx.model);
     }
     for (const Pass& p : allPasses()) {
-        bool selected = names.empty();
+        bool selected = names.empty() && std::string(p.name) != "insert-dma-waits";
         for (const std::string& name : names) selected |= name == p.name;
         if (selected) {
             p.run(code, ctx);
-            validateRtlDma(code, ctx);
-            if (hasRelease) validateReleaseDma(code, ctx.model);
+            if (std::string(p.name) == "insert-dma-waits") insertingWaits = false;
+            if (!insertingWaits) {
+                validateRtlDma(code, ctx);
+                if (hasRelease) validateReleaseDma(code, ctx.model);
+            }
         }
     }
 }

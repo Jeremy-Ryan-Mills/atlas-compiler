@@ -5,6 +5,21 @@
 #include <map>
 #include <stdexcept>
 
+// Does instruction `f` conflict with what DMA instruction `dma` does at completion?
+bool conflictsAtCompletion(const Footprint& dma, const Footprint& f, EdgeKind& kind, const MachineModel& model) {
+    for (const Access& x : dma.accesses) {
+        if (!x.atCompletion) continue;
+        for (const Access& y : f.accesses) {
+            const bool queuedVmem = !model.rtlDma && x.res == Res::Vmem && y.atCompletion;
+            if (!accessesOverlap(x, y) || (!x.write && !y.write && !queuedVmem)) continue;
+            if (x.res == Res::DmaBase && y.atCompletion) continue;  // the DMA queue keeps these in order
+            kind = x.write && y.write ? EdgeKind::WAW : x.write ? EdgeKind::RAW : y.write ? EdgeKind::WAR : EdgeKind::Order;
+            return true;
+        }
+    }
+    return false;
+}
+
 namespace {
 
 // Adds an edge, or raises the distance of an existing edge between the same nodes.
@@ -23,19 +38,6 @@ struct EdgeSet {
     }
 };
 
-// Does instruction `f` conflict with what DMA instruction `dma` does at completion?
-bool conflictsAtCompletion(const Footprint& dma, const Footprint& f, EdgeKind& kind) {
-    for (const Access& x : dma.accesses) {
-        if (!x.atCompletion) continue;
-        for (const Access& y : f.accesses) {
-            if (!accessesOverlap(x, y) || (!x.write && !y.write)) continue;
-            if (x.res == Res::DmaBase && y.atCompletion) continue;  // the DMA queue keeps these in order
-            kind = x.write && y.write ? EdgeKind::WAW : x.write ? EdgeKind::RAW : EdgeKind::WAR;
-            return true;
-        }
-    }
-    return false;
-}
 
 bool isDmaTransfer(const Instr& in) {
     return in.op->opClass == OpClass::DmaLoad || in.op->opClass == OpClass::DmaStore;
@@ -48,9 +50,8 @@ std::runtime_error dmaError(const Instr& in, const std::string& reason) {
 
 // A transfer's memory lifetime ends at an explicit matching wait, never at the
 // estimated dmaCycles. Issue operands have already been captured by hardware.
-// The native RTL mode currently admits only transfers completed within a block;
-// CFG admission separately requires idle DMA at every block boundary.
-void addRtlDmaEdges(DepGraph& g, EdgeSet& edges) {
+// With incoming CFG state, a lifetime may continue into a successor block.
+void addRtlDmaEdges(DepGraph& g, EdgeSet& edges, const MachineModel& model, const IncomingDma* incoming) {
     const int n = (int)g.nodes.size();
     std::array<int, 8> pending;
     pending.fill(-1);
@@ -72,7 +73,7 @@ void addRtlDmaEdges(DepGraph& g, EdgeSet& edges) {
         }
     }
     for (int d : pending)
-        if (d >= 0)
+        if (d >= 0 && !incoming)
             throw dmaError(g.nodes[d], "transfer requires an explicit matching DMA.WAIT in the same block");
 
     // Enqueue has no ready signal. Launch order is preserved, so command i uses
@@ -80,7 +81,7 @@ void addRtlDmaEdges(DepGraph& g, EdgeSet& edges) {
     // cannot establish that this particular slot has retired.
     for (size_t i = 8; i < launches.size(); i++) {
         const int previous = launches[i - 8], current = launches[i];
-        if (waits[previous] >= current)
+        if (waits[previous] < 0 || waits[previous] >= current)
             throw dmaError(g.nodes[current], "ring slot reused before the earlier transfer's explicit DMA.WAIT");
         edges.add(waits[previous], current, 1, EdgeKind::Order,
                   "RTL DMA ring slot must retire before its eighth subsequent launch");
@@ -90,12 +91,38 @@ void addRtlDmaEdges(DepGraph& g, EdgeSet& edges) {
         const int wait = waits[d];
         for (int k = d + 1; k < n; k++) {
             EdgeKind kind;
-            if (k == wait || !conflictsAtCompletion(g.footprints[d], g.footprints[k], kind)) continue;
-            if (k < wait)
+            if (k == wait || !conflictsAtCompletion(g.footprints[d], g.footprints[k], kind, model)) continue;
+            if (wait < 0 || k < wait)
                 throw dmaError(g.nodes[k], "memory access conflicts with pending " + g.nodes[d].op->name +
                                           " before its explicit DMA.WAIT");
             edges.add(wait, k, 1, kind, std::string(edgeKindName(kind)) +
                       " with RTL DMA memory lifetime (released by explicit wait)");
+        }
+    }
+
+    if (!incoming) return;
+    for (int channel = 0; channel < 8; ++channel) {
+        int wait = -1;
+        for (int k = 0; k < n; ++k)
+            if (g.nodes[k].op->opClass == OpClass::DmaWait && g.nodes[k].op->channel == channel) {
+                wait = k;
+                break;
+            }
+        for (auto [site, age] : incoming->pending[channel]) {
+            unsigned laterLaunches = 0;
+            const Footprint& dma = incoming->commands->at(site);
+            for (int k = 0; k < n; ++k) {
+                const bool launch = isDmaTransfer(g.nodes[k]);
+                EdgeKind kind = EdgeKind::Order;
+                const bool guarded = conflictsAtCompletion(dma, g.footprints[k], kind, model) ||
+                    (launch && (g.nodes[k].op->channel == channel || age + laterLaunches >= 7));
+                if (guarded && k != wait) {
+                    if (wait < 0 || wait >= k)
+                        throw dmaError(g.nodes[k], "incoming transfer requires a matching wait before use or ring/channel reuse");
+                    edges.add(wait, k, 1, kind, "incoming RTL DMA lifetime released by matching wait");
+                }
+                if (launch) ++laterLaunches;
+            }
         }
     }
 }
@@ -112,7 +139,7 @@ uint32_t dmaOperandRegisters(const std::vector<Instr>& instrs) {
     return mask & ~1u;
 }
 
-DepGraph buildGraph(const std::vector<Instr>& instrs, const RegValues& entry, uint32_t dmaRegs, const MachineModel& model) {
+DepGraph buildGraph(const std::vector<Instr>& instrs, const RegValues& entry, uint32_t dmaRegs, const MachineModel& model, const IncomingDma* incoming) {
     DepGraph g;
     g.nodes = instrs;
     int n = (int)instrs.size();
@@ -129,7 +156,7 @@ DepGraph buildGraph(const std::vector<Instr>& instrs, const RegValues& entry, ui
             if (d.distance > 0) edges.add(a, b, d.distance, d.kind, d.reason);
         }
 
-    if (model.rtlDma) addRtlDmaEdges(g, edges);
+    if (model.rtlDma) addRtlDmaEdges(g, edges, model, incoming);
 
     // The legacy model reads DMA registers and moves data when it completes, which is only known
     // to have happened once the matching dma.wait issues. Later conflicting accesses
@@ -142,7 +169,7 @@ DepGraph buildGraph(const std::vector<Instr>& instrs, const RegValues& entry, ui
             if (g.nodes[k].op->opClass == OpClass::DmaWait && g.nodes[k].op->channel == op.channel) wait = k;
         for (int k = d + 1; k < n; k++) {
             EdgeKind kind;
-            if (k == wait || !conflictsAtCompletion(g.footprints[d], g.footprints[k], kind)) continue;
+            if (k == wait || !conflictsAtCompletion(g.footprints[d], g.footprints[k], kind, model)) continue;
             if (wait >= 0 && wait < k)
                 edges.add(wait, k, 1, kind, std::string(edgeKindName(kind)) + " with " + op.name + " (done once the wait issues)");
             else
@@ -152,7 +179,7 @@ DepGraph buildGraph(const std::vector<Instr>& instrs, const RegValues& entry, ui
 
     // A dma.wait for a transfer started in an earlier block guards data this block can't
     // see, so later VMEM accesses, DMA commands and writes to DMA operand registers stay behind it.
-    for (int w = 0; w < n; w++) {
+    for (int w = 0; w < n && !(model.rtlDma && incoming); w++) {
         const OpInfo& op = *g.nodes[w].op;
         if (op.opClass != OpClass::DmaWait) continue;
         bool local = false;

@@ -10,6 +10,7 @@
 // One dependency graph together with the cycle each node issues at.
 struct GraphView {
     DepGraph graph;
+    std::string diagnostic;       // dependency graph unavailable for invalid input
     std::vector<int> cycles;       // issue cycle of each node, relative to the block start
     std::vector<bool> redundant;   // edges implied by longer paths
     int length = 0;                // cycles until the next block can start
@@ -27,8 +28,7 @@ struct ProgramView {
     SimResult before, after;
 };
 
-// Builds the before/after graphs of every block. `optimized` must have the same
-// blocks as `original` (the passes keep the block structure).
+// Builds before/after graphs, including an optional DMA completion exit block.
 ProgramView buildProgramView(const std::string& source, const AsmProgram& original, const Code& optimized,
                              const SimResult& before, const SimResult& after, const MachineModel& model = {});
 

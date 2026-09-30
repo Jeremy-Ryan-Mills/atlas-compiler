@@ -6,6 +6,7 @@
 #include <stdexcept>
 
 #include "core/depgraph.h"
+#include "core/dma_flow.h"
 #include "core/reservations.h"
 #include "passes/pass.h"
 
@@ -13,16 +14,15 @@ static std::runtime_error scheduleError(const Instr& in, const std::string& why)
     return std::runtime_error("line " + std::to_string(in.line) + " (" + formatInstr(in) + "): " + why);
 }
 
-// Reorders and times one block. The block may assume an idle machine on entry and
-// drains (everything it started finishes) before its successors begin.
+// Fixed-latency work drains at block boundaries; incoming DMA uses event guards.
 static void scheduleBlock(Block& block, const RegValues& entry, bool robustDma, bool lastBlock, bool fallthroughHalt,
-                          uint32_t dmaRegs, const MachineModel& model) {
+                          uint32_t dmaRegs, const MachineModel& model, const IncomingDma* incoming) {
     std::vector<Instr> nodes = blockInstructions(block);
     int nb = (int)block.body.size(), n = (int)nodes.size();
     int term = block.terminator ? nb : -1;
     int slot = hasDelaySlot(block) ? nb + 1 : -1;
 
-    DepGraph g = buildGraph(nodes, entry, dmaRegs, model);
+    DepGraph g = buildGraph(nodes, entry, dmaRegs, model, incoming);
     for (int i = 0; i < n; i++) {
         if (!g.footprints[i].error.empty()) throw scheduleError(nodes[i], g.footprints[i].error);
         std::string alone = ReservationTable().conflict(nodes[i], g.footprints[i], 0);
@@ -137,6 +137,12 @@ static void scheduleBlock(Block& block, const RegValues& entry, bool robustDma, 
 void schedule(Code& code, PassContext& ctx) {
     std::vector<RegValues> entry = blockEntryValues(code, ctx.model.rtlDmaRanges);
     uint32_t dmaRegs = dmaOperandRegisters(flatten(code).instrs);
+    DmaFlow flow;
+    if (ctx.model.rtlDma) {
+        validateDmaFlow(code, ctx.model);
+        flow = analyzeDmaFlow(code, ctx.model);
+    }
+
     for (size_t bi = 0; bi < code.blocks.size(); bi++) {
         try {
             bool lastBlock = bi + 1 == code.blocks.size();
@@ -145,7 +151,9 @@ void schedule(Code& code, PassContext& ctx) {
             while (next < code.blocks.size() && code.blocks[next].body.empty() && !code.blocks[next].terminator) next++;
             bool fallthroughHalt = next < code.blocks.size() && code.blocks[next].body.empty() &&
                                    code.blocks[next].terminator && code.blocks[next].terminator->op->opClass == OpClass::Halt;
-            scheduleBlock(code.blocks[bi], entry[bi], ctx.robustDma, lastBlock, fallthroughHalt, dmaRegs, ctx.model);
+            IncomingDma incoming;
+            if (ctx.model.rtlDma) incoming = {flow.before[bi].front(), &flow.commands};
+            scheduleBlock(code.blocks[bi], entry[bi], ctx.robustDma, lastBlock, fallthroughHalt, dmaRegs, ctx.model, ctx.model.rtlDma ? &incoming : nullptr);
         } catch (const std::runtime_error& e) {
             throw std::runtime_error("block " + std::to_string(bi) + ": " + e.what());
         }
