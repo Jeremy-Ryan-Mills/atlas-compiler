@@ -30,7 +30,7 @@ This feature does not insert DMA waits.
 | --- | --- |
 | `config`, `source_ir_sha256` | `EE290SimConfig` and the common hardware-IR identity |
 | `compiler`, `source` | SHA-256 identities of `atlas-opt` and bundled `before.S` |
-| `profiles` | Selected MXU0, MXU1, DMA, and LSU projections plus canonical evidence |
+| `profiles` | Selected MXU0, MXU1, DMA, LSU, and XLU projections plus canonical evidence |
 | `footprints` | Native operand-resolved `Access`, `Hold`, reservation, and dependency data |
 | `semantics`, `limitations` | Assembly, age, completion rules, and evidence boundaries |
 | `merlin` | Pinned comparison reference and precision-loss report |
@@ -58,6 +58,7 @@ python3 -B scripts/rtlgraph_contract.py export \
   --mxu1-profile profiles/EE290SimConfig/mxu1/atlas-mxu1.profile \
   --dma-profile profiles/EE290SimConfig/dma/atlas-dma.profile \
   --lsu-profile profiles/EE290SimConfig/lsu/atlas-lsu.profile \
+  --xlu-profile profiles/EE290SimConfig/xlu/atlas-xlu.profile \
   --output build/rtlgraph-contract/handoff
 
 python3 -B scripts/rtlgraph_contract.py verify \
@@ -69,7 +70,8 @@ build/atlas-opt build/rtlgraph-contract/handoff/before.S \
   --experimental-mxu0-profile build/rtlgraph-contract/handoff/mxu0/atlas-mxu0.profile \
   --experimental-mxu1-profile build/rtlgraph-contract/handoff/mxu1/atlas-mxu1.profile \
   --rtl-dma-profile build/rtlgraph-contract/handoff/dma/atlas-dma.profile \
-  --rtl-lsu-profile build/rtlgraph-contract/handoff/lsu/atlas-lsu.profile
+  --rtl-lsu-profile build/rtlgraph-contract/handoff/lsu/atlas-lsu.profile \
+  --rtl-xlu-profile build/rtlgraph-contract/handoff/xlu/atlas-xlu.profile
 ```
 
 Omit unused profiles. The verify step reruns the native footprint query with the
@@ -77,6 +79,11 @@ pinned compiler and requires exact equality. The normal optimizer invocation the
 runs its scheduling and final checks. Bundle artifact paths are relative except
 for the compiler, which may move only when its bytes still match; `verify`
 accepts `--atlas-opt` for that relocated but byte-identical binary.
+
+`semantics.dma_completion` follows the selected native model: `explicit-wait`
+with an RTL DMA profile, otherwise `modeled-completion`. Verification rejects
+missing or inconsistent timing conventions, including bundles exported with the
+previous unconditional `explicit-wait` label. Re-export those bundles.
 
 ## Merlin relationship
 

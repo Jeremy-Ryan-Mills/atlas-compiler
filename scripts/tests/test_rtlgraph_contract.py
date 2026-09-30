@@ -15,7 +15,7 @@ COMPILER = Path(sys.argv.pop(1)).resolve()
 REPOSITORY = Path(__file__).resolve().parents[2]
 PROFILE_ROOT = REPOSITORY / 'profiles/EE290SimConfig'
 PROFILES = {role: PROFILE_ROOT / role / f'atlas-{role}.profile'
-            for role in ('mxu0', 'mxu1', 'dma', 'lsu')}
+            for role in ('mxu0', 'mxu1', 'dma', 'lsu', 'xlu')}
 
 
 class ContractTests(unittest.TestCase):
@@ -23,7 +23,8 @@ class ContractTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.before = self.root / 'before.S'
-        self.before.write_text('li x6, 536870912\nvload m0, 0(x6)\nvstore m0, 128(x6)\necall\n')
+        self.before.write_text('li x6, 536870912\nvload m0, 0(x6)\nvtrpose.xlu m1, m0\n'
+                               'vstore m1, 128(x6)\necall\n')
 
     def tearDown(self):
         self.temp.cleanup()
@@ -40,10 +41,56 @@ class ContractTests(unittest.TestCase):
         dump = read_json(bundle / 'footprints.json')
         load_insn = next(i for b in dump['blocks'] for i in b['instructions'] if i['opcode'] == 'vload')
         self.assertEqual({a['age'] for a in load_insn['footprint']['accesses'] if a['write']}, {3})
+        self.assertTrue(dump['model']['rtl_xlu'])
+        self.assertEqual(contract['semantics']['dma_completion'], 'explicit-wait')
         self.assertEqual(contract['merlin']['adapter_status'], 'no-lossless-gap-projection')
         moved = self.root / 'moved'
         shutil.copytree(bundle, moved)
         load(moved / 'contract.json')
+
+    def test_profiles_without_dma_retain_modeled_completion(self):
+        for role in ('lsu', 'mxu1'):
+            with self.subTest(role=role):
+                bundle = self.root / role
+                export(self.before, COMPILER, {role: PROFILES[role]}, bundle)
+                contract = load(bundle / 'contract.json')
+                self.assertEqual(contract['semantics']['dma_completion'], 'modeled-completion')
+                self.assertFalse(read_json(bundle / 'footprints.json')['model']['rtl_dma'])
+
+    def test_contract_semantics_cannot_be_changed_or_omitted(self):
+        bundle = self.bundle()
+        path = bundle / 'contract.json'
+        contract = read_json(path)
+        semantics = contract['semantics']
+        cases = [None, {}, {**semantics, 'unknown': 'value'}]
+        for key in semantics:
+            cases.extend(({**semantics, key: 'changed'},
+                          {k: v for k, v in semantics.items() if k != key}))
+        for altered in cases:
+            with self.subTest(semantics=altered):
+                document = {k: v for k, v in contract.items() if k != 'semantics'}
+                if altered is not None:
+                    document['semantics'] = altered
+                write_json(path, document)
+                with self.assertRaisesRegex(ValueError, 'Contract semantics'):
+                    load(path)
+
+    def test_native_semantics_must_agree_with_selected_profiles(self):
+        bundle = self.bundle()
+        path = bundle / 'contract.json'
+        contract = read_json(path)
+        footprints = read_json(bundle / 'footprints.json')
+        cases = [('semantics', 'age_origin', 'reset'), ('semantics', 'hold_end', 'exclusive'),
+                 ('semantics', 'at_completion', 'access at modeled DMA completion'),
+                 ('model', 'rtl_dma', False)]
+        for section, key, value in cases:
+            with self.subTest(field=key):
+                altered = {**footprints, section: {**footprints[section], key: value}}
+                write_json(bundle / 'footprints.json', altered)
+                contract['footprints'] = identity(bundle / 'footprints.json', bundle)
+                write_json(path, contract)
+                with self.assertRaisesRegex(ValueError, 'Unsupported native|DMA model differs'):
+                    load(path)
 
     def test_profile_evidence_and_common_hardware_are_checked(self):
         source = self.root / 'changed-lsu'

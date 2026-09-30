@@ -372,12 +372,14 @@ Footprint footprintOf(const Instr& in, const RegValues& regs, const MachineModel
             b.f.writeRelease = 32;
             break;
         case OpClass::Transpose:
-            b.mrows(in.rs1, false, 1);
-            b.mrows(in.rd, true, 34);
+            b.mrows(in.rs1, false, model.xluReadAge);
+            b.mrows(in.rd, true, model.xluWriteAge);
             b.f.mregReads = {in.rs1};
             b.f.mregWrites = {in.rd};
-            b.f.readRelease = 33, b.f.writeRelease = 65;
-            b.hold(Unit::Xlu, 0, 0, 65);
+            // Retain inherited reservation floors; delayed accesses cannot release early.
+            b.f.readRelease = std::max(33, model.xluReadAge + 32);
+            b.f.writeRelease = std::max(65, model.xluWriteAge + 31);
+            b.hold(Unit::Xlu, 0, 0, model.xluFirstFreeAge - 1);
             break;
 
         case OpClass::DmaLoad:

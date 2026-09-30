@@ -1,6 +1,7 @@
 #include "core/machine.h"
 
 #include <algorithm>
+#include <charconv>
 #include <fstream>
 #include <map>
 #include <stdexcept>
@@ -49,6 +50,17 @@ const std::string& requireField(const Profile& profile, const std::string& key) 
 void requireValue(const Profile& profile, const std::string& key, const std::string& expected) {
     const std::string& value = requireField(profile, key);
     if (value != expected) throw profile.error("unsupported " + key + "=" + value);
+}
+
+int readAge(const Profile& profile, const std::string& key, int maximum) {
+    const std::string& value = requireField(profile, key);
+    int result = 0;
+    const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), result);
+    if (error != std::errc{} || end != value.data() + value.size() || value.size() > 10)
+        throw profile.error("invalid " + key);
+    if (result < 1 || result > maximum)
+        throw profile.error(key + " outside supported range 1.." + std::to_string(maximum));
+    return result;
 }
 
 void requireHash(const Profile& profile, const std::string& key) {
@@ -153,23 +165,13 @@ MachineModel readExperimentalLsuProfile(const std::string& path, const MachineMo
         requireValue(profile, key, expected);
     }
     requireIdentity(profile, base);
-    auto age = [&](const std::string& key, int maximum) {
-        const std::string& value = requireField(profile, key);
-        if (value.empty() || value.size() > 3 ||
-            !std::all_of(value.begin(), value.end(), [](char c) { return c >= '0' && c <= '9'; }))
-            throw profile.error("invalid " + key);
-        int result = std::stoi(value);
-        if (result < 1 || result > maximum)
-            throw profile.error(key + " outside supported range 1.." + std::to_string(maximum));
-        return result;
-    };
     MachineModel model = base;
-    model.vloadReadAge = age("vload_read_age", 64);
-    model.vloadWriteAge = age("vload_write_age", 64);
-    model.vloadFirstFreeAge = age("vload_first_free_age", 128);
-    model.vstoreReadAge = age("vstore_read_age", 64);
-    model.vstoreWriteAge = age("vstore_write_age", 64);
-    model.vstoreFirstFreeAge = age("vstore_first_free_age", 128);
+    model.vloadReadAge = readAge(profile, "vload_read_age", 64);
+    model.vloadWriteAge = readAge(profile, "vload_write_age", 64);
+    model.vloadFirstFreeAge = readAge(profile, "vload_first_free_age", 128);
+    model.vstoreReadAge = readAge(profile, "vstore_read_age", 64);
+    model.vstoreWriteAge = readAge(profile, "vstore_write_age", 64);
+    model.vstoreFirstFreeAge = readAge(profile, "vstore_first_free_age", 128);
     if (fields.size() != supported.size() + 8) throw profile.error("unknown fields");
     for (bool load : {true, false}) {
         int read = load ? model.vloadReadAge : model.vstoreReadAge;
@@ -181,5 +183,27 @@ MachineModel readExperimentalLsuProfile(const std::string& path, const MachineMo
     }
     model.rtlLsu = true;
     setIdentity(model, base, profile, "LSU");
+    return model;
+}
+
+MachineModel readExperimentalXluProfile(const std::string& path, const MachineModel& base) {
+    const Profile profile = loadFields("XLU profile", path);
+    const Fields supported = {
+        {"schema", "atlas-xlu-profile-v1"}, {"config", "EE290SimConfig"},
+        {"rows", "32"}, {"row_step", "1"}, {"operand_capture", "issue"},
+    };
+    for (const auto& [key, expected] : supported) requireValue(profile, key, expected);
+    requireIdentity(profile, base);
+    MachineModel model = base;
+    // Match the scheduler's bounded idle search; reservations allocate per cycle.
+    constexpr int maxAge = 100000;
+    model.xluReadAge = readAge(profile, "read_age", maxAge);
+    model.xluWriteAge = readAge(profile, "write_age", maxAge);
+    model.xluFirstFreeAge = readAge(profile, "first_free_age", maxAge);
+    if (profile.fields.size() != supported.size() + 5) throw profile.error("unknown fields");
+    if (model.xluWriteAge <= model.xluReadAge + 31 || model.xluFirstFreeAge <= model.xluWriteAge + 31)
+        throw profile.error("write must follow all 32 reads and first_free must follow the last write");
+    model.rtlXlu = true;
+    setIdentity(model, base, profile, "XLU");
     return model;
 }

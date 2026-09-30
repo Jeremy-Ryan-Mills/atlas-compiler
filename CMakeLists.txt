@@ -52,4 +52,6 @@ if(Python3_Interpreter_FOUND)
     ${CMAKE_SOURCE_DIR}/tests/footprint_dump_tests.py $<TARGET_FILE:atlas-opt>)
   add_test(NAME rtlgraph-contract-tests COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_SOURCE_DIR}/scripts/tests/test_rtlgraph_contract.py $<TARGET_FILE:atlas-opt>)
+  add_test(NAME rtlgraph-xlu-tests COMMAND ${Python3_EXECUTABLE} -B
+    ${CMAKE_SOURCE_DIR}/scripts/tests/test_rtlgraph_xlu.py)
 endif()

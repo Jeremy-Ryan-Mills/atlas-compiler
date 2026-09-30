@@ -1,0 +1,46 @@
+{
+  "schema": "atlas.rtlgraph.xlu-profile.v1",
+  "config": "EE290SimConfig",
+  "status": "conditional_typed_execution_and_symbolic_routing",
+  "inputs": {
+    "hardware_ir": {
+      "sha256": "d2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2"
+    },
+    "extractor": {
+      "sha256": "bd7442bcd0a4721039ae6fd04df29f8de0f4685a593391f909dc821ae719ba6f"
+    },
+    "typed_query": {
+      "sha256": "74972918c719c51e9ac64169c8814f2bdcdbda4fa48ed5bcf43accbda8c8f096"
+    },
+    "typed_output": {
+      "sha256": "af94ac6339024d06da429fd301ddbabd575bed9e46d57e21a97ae0ca809c301d"
+    }
+  },
+  "compiler_overrides": {
+    "rows": 32,
+    "row_step": 1,
+    "operand_capture": "issue",
+    "read_age": 1,
+    "write_age": 34,
+    "first_free_age": 66
+  },
+  "scope": "VTRPOSE.XLU physical MREG row accesses and XLU occupancy; symbolic 32x32-byte transpose routing.",
+  "assumptions": [
+    "Age zero is command acceptance while XLU is idle.",
+    "Resettable registers start at their post-reset values; unreset payload and command registers remain symbolic.",
+    "Each MREG request receives its corresponding response exactly one cycle later.",
+    "No conflicting MREG port access or reset occurs during the transaction.",
+    "The frontend routes VTRPOSE.XLU directly to this instance in the pinned configuration."
+  ],
+  "checks": [
+    "All 8192 payload bits route to their transpose positions.",
+    "Changing command operands after launch does not change source or destination.",
+    "Asserting a second command throughout busy does not affect the active transpose.",
+    "An extra response cycle shifts write start and release by one."
+  ],
+  "limitations": [
+    "Conditional finite typed execution, not a whole-design or unbounded proof.",
+    "Logical MREG reservations and same-cycle visibility remain inherited.",
+    "Frontend routing and MREG response timing require independent RTL validation."
+  ]
+}

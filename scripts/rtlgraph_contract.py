@@ -12,7 +12,7 @@ import tempfile
 SCHEMA = 'atlas.rtlgraph.contract.v1'
 CONFIG = 'EE290SimConfig'
 FLAGS = {'mxu0': '--experimental-mxu0-profile', 'mxu1': '--experimental-mxu1-profile',
-         'dma': '--rtl-dma-profile', 'lsu': '--rtl-lsu-profile'}
+         'dma': '--rtl-dma-profile', 'lsu': '--rtl-lsu-profile', 'xlu': '--rtl-xlu-profile'}
 MERLIN_REF = '81a585b857838baeba35bc55eab7db10525db7cb'
 MERLIN_URL = ('https://github.com/ucb-bar/merlin/blob/' + MERLIN_REF +
               '/examples/atlas/phase1/contracts/hwbringup_atlas_v0/schedule_contract.yaml')
@@ -67,7 +67,7 @@ def validate_profile(role, projection, evidence):
     schemas = [f'atlas-{role}-profile-v1'] + (['atlas-dma-profile-v2'] if role == 'dma' else [])
     require(fields.get('schema') in schemas and fields.get('config') == report.get('config') == CONFIG,
             f'Unsupported {role} profile')
-    if role in ('dma', 'lsu'):
+    if role in ('dma', 'lsu', 'xlu'):
         version = fields['schema'].rsplit('-', 1)[1]
         require(report.get('schema') == f'atlas.rtlgraph.{role}-profile.{version}',
                 f'Unsupported {role} evidence')
@@ -100,6 +100,21 @@ def query(compiler, source, entries, root, output):
     return read_json(output)
 
 
+def contract_semantics(footprints, roles):
+    model, native = footprints.get('model', {}), footprints.get('semantics', {})
+    rtl_dma = model.get('rtl_dma')
+    require(type(rtl_dma) is bool and rtl_dma == ('dma' in roles),
+            'Footprint DMA model differs from selected profiles')
+    require(native.get('age_origin') == 'instruction issue' and native.get('hold_end') == 'inclusive',
+            'Unsupported native footprint timing semantics')
+    completion = ('memory lifetime until explicit matching DMA.WAIT; age is not a bound' if rtl_dma
+                  else 'access at modeled DMA completion')
+    require(native.get('at_completion') == completion, 'Unsupported native DMA completion semantics')
+    return {'assembly': 'atlas-opt-native', 'age_zero': 'instruction-issue',
+            'hold_interval': 'inclusive',
+            'dma_completion': 'explicit-wait' if rtl_dma else 'modeled-completion'}
+
+
 def load(path, compiler_override=None, fresh=True):
     contract, root = read_json(path), path.resolve().parent
     require(contract.get('schema') == SCHEMA and contract.get('config') == CONFIG,
@@ -123,6 +138,8 @@ def load(path, compiler_override=None, fresh=True):
     require(saved.get('schema') == 'atlas.footprints.v1' and
             saved.get('model', {}).get('source_ir_sha256') == contract['source_ir_sha256'],
             'Footprints do not describe the selected hardware model')
+    require(contract.get('semantics') == contract_semantics(saved, roles),
+            'Contract semantics differ from the selected native model')
     if fresh:
         with tempfile.TemporaryDirectory(prefix='rtlgraph-verify-') as directory:
             current = query(compiler, source, contract['profiles'], root, Path(directory) / 'footprints.json')
@@ -150,13 +167,12 @@ def export(source, compiler, selected, output):
         entries.append({'role': role, 'projection': identity(destination / projection.name, output),
                         'evidence': identity(destination / 'profile.json', output)})
     footprints = output / 'footprints.json'
-    query(compiler, output / 'before.S', entries, output, footprints)
+    native = query(compiler, output / 'before.S', entries, output, footprints)
     contract = {
         'schema': SCHEMA, 'config': CONFIG, 'source_ir_sha256': hardware.pop(),
         'compiler': identity(compiler), 'source': identity(output / 'before.S', output),
         'profiles': entries, 'footprints': identity(footprints, output),
-        'semantics': {'assembly': 'atlas-opt-native', 'age_zero': 'instruction-issue',
-                      'hold_interval': 'inclusive', 'dma_completion': 'explicit-wait'},
+        'semantics': contract_semantics(native, selected),
         'merlin': {'reference': MERLIN_URL, 'adapter_status': 'no-lossless-gap-projection',
                    'precision_loss': ['row-specific operand ages and resolved ranges',
                                       'ports, resource capacities, and multi-instruction conflicts',

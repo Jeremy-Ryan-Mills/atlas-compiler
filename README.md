@@ -16,7 +16,7 @@ build/atlas-opt kernel.S -o kernel.opt.S --viz kernel.html
 The [RTL extraction plan](.agents/notes/RTL_GRAPH_PLAN.md) and
 [profile guide](docs/rtlgraph-model.md) describe optional partial profiles for
 `EE290SimConfig`. Checked-in projections live under
-`profiles/EE290SimConfig/{mxu0,mxu1,dma,lsu}/`; unselected rules keep the built-in
+`profiles/EE290SimConfig/{mxu0,mxu1,dma,lsu,xlu}/`; unselected rules keep the built-in
 model. Controlled full-kernel replays pass the original output goldens, including
 fused attention at **24,932→22,132 completion edges** on MXU1. These are finite
 measurements with documented evidence limits. The
@@ -36,6 +36,7 @@ and a practical Merlin integration boundary.
 | `--experimental-mxu0-profile FILE` | load the optional MXU0 accumulator-read projection; may compose with an MXU1 profile from the same hardware IR |
 | `--rtl-dma-profile FILE` | extend the model with RTL DMA capture, address, and explicit-completion rules; requires robust timing |
 | `--rtl-lsu-profile FILE` | load derived `VLOAD`/`VSTORE` access and path timing from the same hardware IR as other selected profiles |
+| `--rtl-xlu-profile FILE` | load conditional `VTRPOSE.XLU` row timing and engine occupancy from the same hardware IR |
 
 After optimizing, atlas-opt simulates the result (at npu_model's DMA speed and with
 slower DMA) and exits with an error if any timing rule is broken. The viewer shows

@@ -26,6 +26,8 @@ struct MachineModel {
     bool rtlLsu = false;
     int vloadReadAge = 1, vloadWriteAge = 3, vloadFirstFreeAge = 35;
     int vstoreReadAge = 1, vstoreWriteAge = 3, vstoreFirstFreeAge = 35;
+    bool rtlXlu = false;
+    int xluReadAge = 1, xluWriteAge = 34, xluFirstFreeAge = 66;
     std::string sourceIrSha256;
     std::string name = "npu_model/rtl-match";
 };
@@ -34,6 +36,7 @@ MachineModel readExperimentalMxu1Profile(const std::string& path, const MachineM
 MachineModel readExperimentalMxu0Profile(const std::string& path, const MachineModel& base = {});
 MachineModel readExperimentalDmaProfile(const std::string& path, const MachineModel& base = {});
 MachineModel readExperimentalLsuProfile(const std::string& path, const MachineModel& base = {});
+MachineModel readExperimentalXluProfile(const std::string& path, const MachineModel& base = {});
 
 // Storage an instruction reads or writes.
 enum class Res { XReg, EReg, MReg, Acc, Weight, Vmem, DmaBase, Dram };

@@ -3,7 +3,7 @@
 This guide describes the production surface retained from the RTL-graph
 experiments. The profiles are partial, opt-in projections for
 `chipyard.EE290SimConfig`; they augment the existing `atlas-opt` machine model
-rather than replacing it. Detailed extractors, mutation tests, trace tools, and
+rather than replacing it. Earlier extractors, mutation tests, trace tools, and
 chronological experiment notes remain available at
 [`dd7342c`](https://github.com/Jeremy-Ryan-Mills/atlas-compiler/tree/dd7342ce6a3c4d051544bf719086edb59cb80765).
 
@@ -17,6 +17,7 @@ profiles/EE290SimConfig/
     mxu1/atlas-mxu1.profile
     dma/atlas-dma.profile
     lsu/atlas-lsu.profile
+    xlu/atlas-xlu.profile
 ```
 
 Each directory also retains canonical evidence for the projection. Profile and
@@ -29,7 +30,8 @@ build/atlas-opt before.S -o after.S \
   --experimental-mxu0-profile profiles/EE290SimConfig/mxu0/atlas-mxu0.profile \
   --experimental-mxu1-profile profiles/EE290SimConfig/mxu1/atlas-mxu1.profile \
   --rtl-dma-profile profiles/EE290SimConfig/dma/atlas-dma.profile \
-  --rtl-lsu-profile profiles/EE290SimConfig/lsu/atlas-lsu.profile
+  --rtl-lsu-profile profiles/EE290SimConfig/lsu/atlas-lsu.profile \
+  --rtl-xlu-profile profiles/EE290SimConfig/xlu/atlas-xlu.profile
 ```
 
 Omit a profile to retain the built-in behavior for that component. Selecting
@@ -45,11 +47,22 @@ insertion is added by this feature.
 | MXU1 | `first_write_age=3`; `overwrite_acc_read_hold=0` for overwrite-only `VMATMUL.MXU1` | Accumulating operations retain their read hold; weight and other resource rules remain built in |
 | DMA v2 | Issue-time command/config capture; 32-byte VMEM lines; eight channels and eight command slots; explicit-wait completion; LSU priority; configured 37-bit DRAM byte ranges | Off-chip completion has no fixed correctness bound; transfers above the admitted 4,096-byte subset are rejected |
 | LSU | 32 rows at unit stride; source-read age 1; destination-write age 3; first-free age 35 for `VLOAD` and `VSTORE` | Scalar LSU timing, logical MREG reservations, same-cycle visibility, and frontend issue remain built in |
+| XLU | `VTRPOSE.XLU` reads rows at ages 1–32, writes at 34–65, and permits the next launch at age 66 | Assumes idle entry and one-cycle MREG responses; logical reservation floors 33/65 and visibility rules remain inherited |
 
 The LSU ages describe streams: reads occur at ages 1–32 and writes at ages 3–34.
 The load/store path hold therefore ends at age 34 inclusive. Unknown VMEM
 addresses retain conservative all-bank holds and must be legal, aligned,
 in-range, and nonwrapping at runtime.
+
+XLU timing matches the built-in model. From post-reset idle state, the extractor
+checks all 8,192 symbolic transpose bits; unsupported or data-dependent control
+is rejected. Busy commands are ignored, so software must prevent them. Delayed
+responses shift completion; delayed profiles extend logical reservation floors.
+
+Regenerate with `python3 scripts/rtlgraph_xlu.py --query RTLGRAPH_EXPORT --hardware-ir atlas.hw.mlir --output DIR`, using the
+[retained typed exporter](https://github.com/Jeremy-Ryan-Mills/atlas-compiler/blob/dd7342ce6a3c4d051544bf719086edb59cb80765/scripts/rtlgraph_query.cpp).
+Pass its `XluEngine` JSON to `scripts/tests/test_rtlgraph_xlu.py` to enable the
+four hardware regressions that ordinary CTest skips without that artifact.
 
 DMA operands are captured when the command issues. `DMA.CONFIG` updates the
 global base at issue; subsequent transfers retain their saved addresses even if
@@ -128,6 +141,12 @@ comparisons. A later four-profile LSU replay rechecked another 1,536 unary and
 1,024 MXU0 words. Those emitted programs were byte-identical to the previously
 optimized candidates, so the LSU profile preserved the improvements but added
 no new speedup.
+
+The [XLU Verilator harness](../scripts/tests/xlu_rtl_check.cpp) passed 256 cases
+and 262,144 byte comparisons on the same CIRCT artifact: every source ID,
+in-place/distinct destinations, consecutive launches, busy-command rejection,
+and one/two-cycle responses. These isolated-module witnesses do not establish
+system response latency, frontend routing, or a new kernel speedup.
 
 Attribution matters. On fused attention, DMA-only critical scheduling completed
 in 22,132 edges, while adding the MXU1 profile completed in 22,136 despite a

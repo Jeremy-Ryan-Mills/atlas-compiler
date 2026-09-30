@@ -46,11 +46,13 @@ int main() {
         model = readExperimentalMxu0Profile((root / "mxu0/atlas-mxu0.profile").string(), model);
         model = readExperimentalDmaProfile((root / "dma/atlas-dma.profile").string(), model);
         model = readExperimentalLsuProfile((root / "lsu/atlas-lsu.profile").string(), model);
+        model = readExperimentalXluProfile((root / "xlu/atlas-xlu.profile").string(), model);
         check(model.sourceIrSha256 == "d2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2",
               "checked-in profiles did not compose over one hardware IR");
-        check(model.rtlDma && model.rtlDmaRanges && model.rtlLsu &&
+        check(model.rtlDma && model.rtlDmaRanges && model.rtlLsu && model.rtlXlu &&
               model.mxu1FirstWriteAge == 3 && !model.mxu0OverwriteAccReadHold &&
-              !model.mxu1OverwriteAccReadHold && model.vloadFirstFreeAge == 35,
+              !model.mxu1OverwriteAccReadHold && model.vloadFirstFreeAge == 35 &&
+              model.xluReadAge == 1 && model.xluWriteAge == 34 && model.xluFirstFreeAge == 66,
               "checked-in profile settings changed");
 
         auto mxu = parseAsm("vmatpop.fp8.acc.mxu1 m8, acc0, e0\nvmatmul.mxu1 acc0, m0, w0\n");
@@ -100,6 +102,32 @@ int main() {
         check(!simulate(flatten(originalSchedule), selected).violations.empty(),
               "selected LSU checker accepted old spacing");
 
+        auto xlu = parseAsm("vtrpose.xlu m2, m0\nvtrpose.xlu m6, m4\necall\n");
+        auto xluSchedule = schedule(xlu, model);
+        check(xluSchedule.blocks[0].issue[1] == 66, "checked-in XLU occupancy missing from schedule");
+        const std::string xluBase = "schema=atlas-xlu-profile-v1\n" + common +
+            "rows=32\nrow_step=1\noperand_capture=issue\n";
+        const std::string changedXlu = xluBase + "read_age=2\nwrite_age=36\nfirst_free_age=69\n";
+        { std::ofstream file(temporary); file << changedXlu; }
+        auto xluModel = readExperimentalXluProfile(temporary.string());
+        const auto xluFootprint = footprintOf(xlu.instrs[0], zeroRegs(), xluModel);
+        check(xluFootprint.accesses.size() == 2 && !xluFootprint.accesses[0].write &&
+              xluFootprint.accesses[0].age == 2 && xluFootprint.accesses[1].write &&
+              xluFootprint.accesses[1].age == 36 && hold(xluFootprint, Unit::Xlu).to == 68 &&
+              xluFootprint.readRelease == 34 && xluFootprint.writeRelease == 67 && xluFootprint.doneAge == 68,
+              "selected XLU timing did not reach physical accesses and conservative reservations");
+        check(schedule(xlu, xluModel).blocks[0].issue[1] == 69,
+              "selected XLU physical hold did not reach scheduling");
+        selected.model = xluModel;
+        check(!simulate(flatten(xluSchedule), selected).violations.empty(),
+              "selected XLU checker accepted old spacing");
+
+        { std::ofstream file(temporary); file << xluBase << "read_age=1\nwrite_age=100\nfirst_free_age=132\n"; }
+        auto delayedXlu = readExperimentalXluProfile(temporary.string());
+        check(footprintOf(xlu.instrs[0], zeroRegs(), delayedXlu).writeRelease == 131 &&
+              schedule(xlu, delayedXlu).blocks[0].issue[1] == 132,
+              "delayed XLU stream was truncated to built-in timing");
+
         const std::string changedMxu = "schema=atlas-mxu1-profile-v1\n" + common +
             "first_write_age=5\noverwrite_acc_read_hold=0\n";
         { std::ofstream file(temporary); file << changedMxu; }
@@ -125,6 +153,31 @@ int main() {
         std::string badAges = changedLsu;
         badAges.replace(badAges.find("vload_write_age=5"), 17, "vload_write_age=2");
         rejects(badAges, [&] { readExperimentalLsuProfile(temporary.string()); });
+        for (const char* ages : {
+                 "read_age=0\nwrite_age=34\nfirst_free_age=66\n",
+                 "read_age=-1\nwrite_age=34\nfirst_free_age=66\n",
+                 "read_age=1x\nwrite_age=34\nfirst_free_age=66\n",
+                 "read_age=1\nwrite_age=32\nfirst_free_age=66\n",
+                 "read_age=1\nwrite_age=34\nfirst_free_age=65\n",
+                 "read_age=1\nwrite_age=34\nfirst_free_age=100001\n",
+                 "read_age=2147483647\nwrite_age=34\nfirst_free_age=66\n",
+                 "read_age=1\nwrite_age=2147483647\nfirst_free_age=66\n",
+                 "read_age=1\nwrite_age=34\nfirst_free_age=2147483648\n",
+                 "read_age=1\nwrite_age=34\n"})
+            rejects(xluBase + ages, [&] { readExperimentalXluProfile(temporary.string()); });
+        rejects(changedXlu + "unknown=1\n", [&] { readExperimentalXluProfile(temporary.string()); });
+        rejects(changedXlu + "read_age=2\n", [&] { readExperimentalXluProfile(temporary.string()); });
+        rejects(changedXlu.substr(changedXlu.find('\n') + 1),
+                [&] { readExperimentalXluProfile(temporary.string()); });
+        for (const auto& [field, invalid] : std::vector<std::pair<std::string, std::string>>{
+                 {"schema", "atlas-xlu-profile-v2"}, {"config", "AtlasRocketConfig"},
+                 {"rows", "31"}, {"row_step", "2"}, {"operand_capture", "completion"},
+                 {"source_ir_sha256", "invalid"}, {"evidence_sha256", std::string(64, 'G')}}) {
+            auto malformed = changedXlu;
+            auto begin = malformed.find(field + "=") + field.size() + 1;
+            malformed.replace(begin, malformed.find('\n', begin) - begin, invalid);
+            rejects(malformed, [&] { readExperimentalXluProfile(temporary.string()); });
+        }
 
         const std::string dmaV1 = "schema=atlas-dma-profile-v1\n" + common +
             "operand_capture=issue\nconfig_update=issue\nvmem_word_address_low_bit=3\n"
@@ -144,6 +197,7 @@ int main() {
         try { readExperimentalMxu1Profile(temporary.string(), other); }
         catch (const std::runtime_error&) { mismatch = true; }
         check(mismatch, "profiles from different hardware IR were combined");
+        rejects(changedXlu, [&] { readExperimentalXluProfile(temporary.string(), other); });
 
         std::filesystem::remove(temporary);
         std::cout << "PASS: checked-in profile composition, parsing, footprints, scheduling and checking\n";

@@ -84,12 +84,18 @@ std::string dumpFootprints(const AsmProgram& program, const MachineModel& model)
         << ",\"vload_read_age\":" << model.vloadReadAge << ",\"vload_write_age\":" << model.vloadWriteAge
         << ",\"vload_first_free_age\":" << model.vloadFirstFreeAge
         << ",\"vstore_read_age\":" << model.vstoreReadAge << ",\"vstore_write_age\":" << model.vstoreWriteAge
-        << ",\"vstore_first_free_age\":" << model.vstoreFirstFreeAge << "},"
+        << ",\"vstore_first_free_age\":" << model.vstoreFirstFreeAge
+        << ",\"rtl_xlu\":" << model.rtlXlu
+        << ",\"xlu_read_age\":" << model.xluReadAge << ",\"xlu_write_age\":" << model.xluWriteAge
+        << ",\"xlu_first_free_age\":" << model.xluFirstFreeAge << "},"
         << "\"semantics\":{\"age_origin\":\"instruction issue\",\"hold_end\":\"inclusive\","
         << "\"entry_state\":\"blockEntryValues: zero scalar registers at program entry, joined CFG values thereafter\","
         << "\"unknown_value\":null,\"lsu_scope\":"
         << quote(model.rtlLsu ? "derived VLOAD/VSTORE access and physical hold timing; logical MREG reservation and visibility rules inherited"
                              : "inherited VLOAD/VSTORE timing and rules")
+        << ",\"xlu_scope\":"
+        << quote(model.rtlXlu ? "derived VTRPOSE.XLU access and hold timing; inherited reservation floors extend for delayed accesses; visibility inherited"
+                             : "inherited VTRPOSE.XLU timing and rules")
         << ",\"at_completion\":"
         << quote(model.rtlDma ? "memory lifetime until explicit matching DMA.WAIT; age is not a bound"
                               : "access at modeled DMA completion")

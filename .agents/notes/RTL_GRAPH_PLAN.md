@@ -1,6 +1,6 @@
 # atlas-rtlgraph: deriving an instruction scheduling model from RTL
 
-Updated 2026-09-28. This document describes the durable design and current
+Updated 2026-09-30. This document describes the durable design and current
 boundary of the RTL-graph work. The detailed extraction scripts, mutation tests,
 replay commands, and chronological evidence remain available at
 [`dd7342c`](https://github.com/Jeremy-Ryan-Mills/atlas-compiler/tree/dd7342ce6a3c4d051544bf719086edb59cb80765).
@@ -21,7 +21,7 @@ from `AtlasShuttleVectorConfig` are historical and are not mixed with this
 profile.
 
 Fresh elaboration and CIRCT verification produced one shared hardware-IR
-identity. Typed structural analyses and finite RTL traces support four optional
+identity. Typed structural analyses and finite RTL traces support five optional
 partial profiles:
 
 | Profile | Derived compiler-facing facts |
@@ -30,9 +30,10 @@ partial profiles:
 | MXU1 | First accumulator write is age 3; overwrite-only `VMATMUL.MXU1` does not reserve an accumulator read |
 | DMA | Operands and configuration are captured at issue; completion is released by explicit `DMA.WAIT`; configured 37-bit DRAM ranges and VMEM/bank constraints are tracked |
 | LSU | `VLOAD` and `VSTORE` read rows at ages 1–32, write rows at ages 3–34, and first release their path at age 35 |
+| XLU | Under idle entry and one-cycle MREG responses, `VTRPOSE.XLU` reads at ages 1–32, writes at 34–65, and first releases the engine at age 66; symbolic routing checks the byte transpose |
 
 The checked-in projections and evidence are under
-`profiles/EE290SimConfig/{mxu0,mxu1,dma,lsu}/`. Their loaders reject malformed
+`profiles/EE290SimConfig/{mxu0,mxu1,dma,lsu,xlu}/`. Their loaders reject malformed
 fields and refuse to compose profiles from different hardware IR. Unselected
 rules retain the compiler's built-in behavior.
 
@@ -109,7 +110,7 @@ fixed off-chip completion bound; correctness uses the matching `DMA.WAIT`.
 
 ## Integration boundary
 
-`atlas-opt` accepts the four profiles independently and composes them only when
+`atlas-opt` accepts the five profiles independently and composes them only when
 their hardware identity matches. It continues to build `Access`, `Hold`, and
 `Footprint` objects and uses the existing dependency graph, list scheduler,
 reservation table, and final checker. This branch requires explicit `DMA.WAIT`

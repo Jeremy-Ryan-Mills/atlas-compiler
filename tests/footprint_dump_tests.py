@@ -108,6 +108,35 @@ class FootprintDumpTests(unittest.TestCase):
         self.assertTrue(instructions[7]['barrier'])
         self.assertEqual(data['blocks'][0]['entry']['dma_base'], 0)
 
+    def test_xlu_profile_exports_physical_timing_and_conservative_reservations(self):
+        source = 'vtrpose.xlu m2, m0\nvtrpose.xlu m6, m4\n'
+        baseline = self.run_query(source)
+        fields = dict(rows=32, row_step=1, operand_capture='issue', read_age=1,
+                      write_age=34, first_free_age=66)
+        current = self.run_query(source, '--rtl-xlu-profile', self.profile('atlas-xlu-profile-v1', **fields))
+        self.assertFalse(baseline['model']['rtl_xlu'])
+        self.assertTrue(current['model']['rtl_xlu'])
+        self.assertEqual(baseline['blocks'], current['blocks'])
+        fields.update(read_age=2, write_age=36, first_free_age=69)
+        changed = self.run_query(source, '--rtl-xlu-profile', self.profile('atlas-xlu-profile-v1', **fields))
+        self.assertEqual(changed['model']['xlu_first_free_age'], 69)
+        self.assertIn('inherited', changed['semantics']['xlu_scope'])
+        f = changed['blocks'][0]['instructions'][0]['footprint']
+        self.assertEqual([(a['write'], a['age'], a['step'], a['count']) for a in f['accesses']],
+                         [(False, 2, 1, 32), (True, 36, 1, 32)])
+        self.assertEqual(next(h['to'] for h in f['holds'] if h['unit'] == 'XLU'), 68)
+        self.assertEqual((f['read_release'], f['write_release'], f['done_age']), (34, 67, 68))
+        self.assertEqual((f['mreg_reads'], f['mreg_writes']), ([0], [2]))
+
+    def test_xlu_profile_cannot_mix_hardware_identities(self):
+        xlu = Path(self.profile('atlas-xlu-profile-v1', rows=32, row_step=1,
+                   operand_capture='issue', read_age=1, write_age=34, first_free_age=66))
+        xlu.write_text(xlu.read_text().replace('a' * 64, 'c' * 64))
+        mxu = self.profile('atlas-mxu1-profile-v1', first_write_age=3, overwrite_acc_read_hold=0)
+        run = self.run_query('vtrpose.xlu m2, m0\n', '--rtl-xlu-profile', str(xlu),
+                             '--experimental-mxu1-profile', mxu, success=False)
+        self.assertIn('different hardware IR', run.stderr)
+
     def test_cfg_joins_keep_unknown_values_and_delay_slots(self):
         source = ('csrrs x3, x0, 0xc00\nbeq x3, x0, other\naddi x0, x0, 0\n'
                   'addi x1, x0, 32\njal x0, join\naddi x0, x0, 0\n'
