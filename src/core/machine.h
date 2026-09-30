@@ -14,15 +14,13 @@ const int kVmemBankBytes = 256 * 1024;
 const int kVmemBanks = kVmemBytes / kVmemBankBytes;
 const int kLineBytes = 32;
 
-// Optional partial RTL profile; every other rule remains the built-in model.
-// Defaults retain the existing npu_model behavior. Experimental profiles require
-// separate RTL validation for the selected configuration and kernel.
+// Profiles override selected fields; other rules retain the built-in model.
 struct MachineModel {
     int mxu0FirstWriteAge = 63, mxu1FirstWriteAge = 3;
     bool mxu1OverwriteAccReadHold = true;
     bool mxu0OverwriteAccReadHold = true;
     bool rtlDma = false;  // issue-captured commands and explicit completion lifetimes
-    bool rtlDmaRanges = false;  // v2 profile: configured, projected DRAM byte ranges
+    bool rtlDmaRanges = false;  // configured, projected DRAM byte ranges
     bool rtlLsu = false, rtlScalarLsu = false;
     int scalarMemoryAge = 1, scalarLoadWriteAge = 3, scalarLoadFirstFreeAge = 3;
     int vloadReadAge = 1, vloadWriteAge = 3, vloadFirstFreeAge = 35;

@@ -102,8 +102,7 @@ SimResult simulate(const AsmProgram& prog, const SimOptions& opt) {
     }
 
     long long t = 2;  // npu_model: word 0 is fetched in cycle 1 and issues in cycle 2
-    // Correctness uses the shortest possible dispatch spacing. A guessed DMA
-    // stall must not retire fixed work or establish a safe operand distance.
+    // Estimated DMA stalls cannot establish safe fixed-engine timing.
     long long minimumT = t;
     long long lastIssue = 0, end = 0;
     int pc = 0, redirect = -1;
@@ -339,8 +338,7 @@ void checkStaticSchedule(const AsmProgram& prog, const MachineModel& model) {
             if (!conflict.empty()) fail(conflict);
             table.reserve(in, footprint, cycles[i]);
             if (in.op->opClass == OpClass::DmaWait) table.extendForWait(cycles[i]);
-            // Every successor starts after all fixed work has retired. DMA
-            // lifetimes are instead checked over CFG joins and backedges above.
+            // Drain fixed work at boundaries; DMA lifetimes follow the CFG.
             const int boundary = block.terminator && block.terminator->op->opClass == OpClass::Halt
                                      ? cycles[block.body.size()] : end;
             if (i < block.body.size() && cycles[i] + footprint.doneAge >= boundary)

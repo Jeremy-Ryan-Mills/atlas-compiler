@@ -7,8 +7,7 @@
 
 #include "core/blocks.h"
 
-// Known scalar values and the DMA address high half captured by DMA.CONFIG.
-// nullopt means unknown. Array access retains the scalar-register interface.
+// Known scalar values and captured DMA.CONFIG high bits; nullopt means unknown.
 struct RegValues : std::array<std::optional<uint32_t>, 32> {
     std::optional<uint32_t> dmaBase;
 };

@@ -31,8 +31,7 @@ void insertDmaWaits(Code& code, PassContext& ctx) {
         waits[b].resize(footprints[b].size() + 1);
     }
 
-    // Wait masks only grow. Finite command sites and saturated ring ages make
-    // each CFG analysis terminate, including loops and divergent predecessors.
+    // Monotone wait masks and bounded ring ages ensure CFG convergence.
     DmaFlow flow;
     bool changed;
     do {
@@ -43,8 +42,7 @@ void insertDmaWaits(Code& code, PassContext& ctx) {
             const Block& block = candidate.blocks[b];
             const auto instructions = blockInstructions(block);
             for (size_t i = 0; i < instructions.size(); ++i) {
-                // A slot executes after the branch, but insertion must happen
-                // before the branch so the native delay-slot layout is preserved.
+                // Insert before the branch to preserve its delay slot.
                 const size_t boundary = std::min(i, block.body.size());
                 PendingDma pending = flow.before[b][i];
                 clearDmaChannels(pending, waits[b][boundary]);

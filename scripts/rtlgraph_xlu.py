@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Derive conditional XLU timing and symbolic payload routing from typed CIRCT.
-
-The typed exporter is retained at dd7342c:scripts/rtlgraph_query.cpp.
-"""
+"""Derive conditional XLU timing and symbolic payload routing from typed CIRCT."""
 import argparse
 from dataclasses import dataclass
 from functools import cache, reduce

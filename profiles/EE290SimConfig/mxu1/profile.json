@@ -4,242 +4,69 @@
   "config": "EE290SimConfig",
   "status": "connected_typed_control_execution",
   "inputs": {
-    "hardware_ir": {
-      "sha256": "d2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2"
-    },
-    "typed_output": {
-      "sha256": "3eb7f807419a5af1742801ebd00b3c02edb1b508952cc1ce2cac5a313646633b"
-    },
-    "extractor": {
-      "sha256": "a61acbc71bc16af0fd2caed16e83801fdb55c9f32673c9cd9713c632abe60aad"
-    },
-    "typed_query": {
-      "sha256": "74972918c719c51e9ac64169c8814f2bdcdbda4fa48ed5bcf43accbda8c8f096"
-    }
+    "hardware_ir": {"sha256": "d2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2"},
+    "typed_output": {"sha256": "3eb7f807419a5af1742801ebd00b3c02edb1b508952cc1ce2cac5a313646633b"},
+    "extractor": {"sha256": "a61acbc71bc16af0fd2caed16e83801fdb55c9f32673c9cd9713c632abe60aad"},
+    "typed_query": {"sha256": "74972918c719c51e9ac64169c8814f2bdcdbda4fa48ed5bcf43accbda8c8f096"}
   },
-  "compiler_overrides": {
-    "first_write_age": 3,
-    "overwrite_acc_read_hold": 0
-  },
+  "compiler_overrides": {"first_write_age": 3, "overwrite_acc_read_hold": 0},
   "commands": {
     "0": {
-      "io_mregReadReq1_valid": {
-        "first": 0,
-        "last": 31,
-        "count": 32
-      },
-      "io_activeReads_1_valid": {
-        "first": 1,
-        "last": 32,
-        "count": 32
-      },
-      "io_weightWriteReq_valid": {
-        "first": 1,
-        "last": 32,
-        "count": 32
-      }
+      "io_mregReadReq1_valid": {"first": 0, "last": 31, "count": 32},
+      "io_activeReads_1_valid": {"first": 1, "last": 32, "count": 32},
+      "io_weightWriteReq_valid": {"first": 1, "last": 32, "count": 32}
     },
     "1": {
-      "io_mregReadReq1_valid": {
-        "first": 0,
-        "last": 31,
-        "count": 32
-      },
-      "io_activeReads_1_valid": {
-        "first": 1,
-        "last": 32,
-        "count": 32
-      },
-      "io_accLoadReq_valid": {
-        "first": 1,
-        "last": 32,
-        "count": 32
-      }
+      "io_mregReadReq1_valid": {"first": 0, "last": 31, "count": 32},
+      "io_activeReads_1_valid": {"first": 1, "last": 32, "count": 32},
+      "io_accLoadReq_valid": {"first": 1, "last": 32, "count": 32}
     },
     "2": {
-      "io_mregReadReq0_valid": {
-        "first": 0,
-        "last": 31,
-        "count": 32
-      },
-      "io_mregReadReq1_valid": {
-        "first": 0,
-        "last": 31,
-        "count": 32
-      },
-      "io_activeReads_0_valid": {
-        "first": 1,
-        "last": 32,
-        "count": 32
-      },
-      "io_activeReads_1_valid": {
-        "first": 1,
-        "last": 32,
-        "count": 32
-      },
-      "io_accLoadReq_valid": {
-        "first": 1,
-        "last": 32,
-        "count": 32
-      }
+      "io_mregReadReq0_valid": {"first": 0, "last": 31, "count": 32},
+      "io_mregReadReq1_valid": {"first": 0, "last": 31, "count": 32},
+      "io_activeReads_0_valid": {"first": 1, "last": 32, "count": 32},
+      "io_activeReads_1_valid": {"first": 1, "last": 32, "count": 32},
+      "io_accLoadReq_valid": {"first": 1, "last": 32, "count": 32}
     },
     "3": {
-      "io_mregWriteReq0_valid": {
-        "first": 1,
-        "last": 32,
-        "count": 32
-      },
-      "io_activeWrites_0_valid": {
-        "first": 1,
-        "last": 32,
-        "count": 32
-      },
-      "io_accStoreReadEn": {
-        "first": 0,
-        "last": 31,
-        "count": 32
-      }
+      "io_mregWriteReq0_valid": {"first": 1, "last": 32, "count": 32},
+      "io_activeWrites_0_valid": {"first": 1, "last": 32, "count": 32},
+      "io_accStoreReadEn": {"first": 0, "last": 31, "count": 32}
     },
     "4": {
-      "io_mregWriteReq0_valid": {
-        "first": 1,
-        "last": 32,
-        "count": 32
-      },
-      "io_mregWriteReq1_valid": {
-        "first": 1,
-        "last": 32,
-        "count": 32
-      },
-      "io_activeWrites_0_valid": {
-        "first": 1,
-        "last": 32,
-        "count": 32
-      },
-      "io_activeWrites_1_valid": {
-        "first": 1,
-        "last": 32,
-        "count": 32
-      },
-      "io_accStoreReadEn": {
-        "first": 0,
-        "last": 31,
-        "count": 32
-      }
+      "io_mregWriteReq0_valid": {"first": 1, "last": 32, "count": 32},
+      "io_mregWriteReq1_valid": {"first": 1, "last": 32, "count": 32},
+      "io_activeWrites_0_valid": {"first": 1, "last": 32, "count": 32},
+      "io_activeWrites_1_valid": {"first": 1, "last": 32, "count": 32},
+      "io_accStoreReadEn": {"first": 0, "last": 31, "count": 32}
     },
     "5": {
-      "io_mregReadReq0_valid": {
-        "first": 0,
-        "last": 31,
-        "count": 32
-      },
-      "io_activeReads_0_valid": {
-        "first": 1,
-        "last": 32,
-        "count": 32
-      },
-      "io_compute_valid": {
-        "first": 1,
-        "last": 32,
-        "count": 32
-      },
-      "io_accComputeWrite_valid": {
-        "first": 3,
-        "last": 34,
-        "count": 32
-      }
+      "io_mregReadReq0_valid": {"first": 0, "last": 31, "count": 32},
+      "io_activeReads_0_valid": {"first": 1, "last": 32, "count": 32},
+      "io_compute_valid": {"first": 1, "last": 32, "count": 32},
+      "io_accComputeWrite_valid": {"first": 3, "last": 34, "count": 32}
     },
     "6": {
-      "io_mregReadReq0_valid": {
-        "first": 0,
-        "last": 31,
-        "count": 32
-      },
-      "io_activeReads_0_valid": {
-        "first": 1,
-        "last": 32,
-        "count": 32
-      },
-      "io_compute_valid": {
-        "first": 1,
-        "last": 32,
-        "count": 32
-      },
-      "io_accComputeWrite_valid": {
-        "first": 3,
-        "last": 34,
-        "count": 32
-      },
-      "io_accComputeReadEn": {
-        "first": 0,
-        "last": 31,
-        "count": 32
-      }
+      "io_mregReadReq0_valid": {"first": 0, "last": 31, "count": 32},
+      "io_activeReads_0_valid": {"first": 1, "last": 32, "count": 32},
+      "io_compute_valid": {"first": 1, "last": 32, "count": 32},
+      "io_accComputeWrite_valid": {"first": 3, "last": 34, "count": 32},
+      "io_accComputeReadEn": {"first": 0, "last": 31, "count": 32}
     }
   },
   "overlap_checks": [
-    {
-      "first_opcode": 5,
-      "second_opcode": 5,
-      "gap": 32,
-      "second_accumulator": 1
-    },
-    {
-      "first_opcode": 0,
-      "second_opcode": 5,
-      "gap": 32,
-      "second_accumulator": 0
-    },
-    {
-      "first_opcode": 1,
-      "second_opcode": 6,
-      "gap": 33,
-      "second_accumulator": 0
-    },
-    {
-      "first_opcode": 2,
-      "second_opcode": 6,
-      "gap": 33,
-      "second_accumulator": 0
-    },
-    {
-      "first_opcode": 5,
-      "second_opcode": 3,
-      "gap": 4,
-      "second_accumulator": 0
-    },
-    {
-      "first_opcode": 6,
-      "second_opcode": 4,
-      "gap": 4,
-      "second_accumulator": 0
-    },
-    {
-      "first_opcode": 3,
-      "second_opcode": 5,
-      "gap": 32,
-      "second_accumulator": 0
-    },
-    {
-      "first_opcode": 4,
-      "second_opcode": 6,
-      "gap": 32,
-      "second_accumulator": 0
-    },
-    {
-      "first_opcode": 0,
-      "second_opcode": 1,
-      "gap": 1,
-      "second_accumulator": 0
-    }
+    {"first_opcode": 5, "second_opcode": 5, "gap": 32, "second_accumulator": 1},
+    {"first_opcode": 0, "second_opcode": 5, "gap": 32, "second_accumulator": 0},
+    {"first_opcode": 1, "second_opcode": 6, "gap": 33, "second_accumulator": 0},
+    {"first_opcode": 2, "second_opcode": 6, "gap": 33, "second_accumulator": 0},
+    {"first_opcode": 5, "second_opcode": 3, "gap": 4, "second_accumulator": 0},
+    {"first_opcode": 6, "second_opcode": 4, "gap": 4, "second_accumulator": 0},
+    {"first_opcode": 3, "second_opcode": 5, "gap": 32, "second_accumulator": 0},
+    {"first_opcode": 4, "second_opcode": 6, "gap": 32, "second_accumulator": 0},
+    {"first_opcode": 0, "second_opcode": 1, "gap": 1, "second_accumulator": 0}
   ],
   "rejected_boundaries": [
-    {
-      "first_opcode": 1,
-      "second_opcode": 6,
-      "gap": 32,
-      "result": "second compute produces no accumulator writes"
-    }
+    {"first_opcode": 1, "second_opcode": 6, "gap": 32, "result": "second compute produces no accumulator writes"}
   ],
   "assumptions": [
     "Age zero is an accepted engine command.",

@@ -3,18 +3,10 @@
   "config": "EE290SimConfig",
   "status": "connected_typed_control_execution",
   "inputs": {
-    "hardware_ir": {
-      "sha256": "d2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2"
-    },
-    "typed_output": {
-      "sha256": "3eb7f807419a5af1742801ebd00b3c02edb1b508952cc1ce2cac5a313646633b"
-    },
-    "extractor": {
-      "sha256": "a61acbc71bc16af0fd2caed16e83801fdb55c9f32673c9cd9713c632abe60aad"
-    },
-    "typed_query": {
-      "sha256": "74972918c719c51e9ac64169c8814f2bdcdbda4fa48ed5bcf43accbda8c8f096"
-    }
+    "hardware_ir": {"sha256": "d2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2"},
+    "typed_output": {"sha256": "3eb7f807419a5af1742801ebd00b3c02edb1b508952cc1ce2cac5a313646633b"},
+    "extractor": {"sha256": "a61acbc71bc16af0fd2caed16e83801fdb55c9f32673c9cd9713c632abe60aad"},
+    "typed_query": {"sha256": "74972918c719c51e9ac64169c8814f2bdcdbda4fa48ed5bcf43accbda8c8f096"}
   },
   "mutation_checks": [
     "Bypassing Relu valid pipeline advances extracted writes.",
@@ -37,44 +29,14 @@
   "instructions": {
     "add": {
       "reads": [
-        {
-          "bank": 2,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 6,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 7,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 2, "age": 0, "step": 1, "count": 32},
+        {"bank": 3, "age": 32, "step": 1, "count": 32},
+        {"bank": 6, "age": 0, "step": 1, "count": 32},
+        {"bank": 7, "age": 32, "step": 1, "count": 32}
       ],
       "writes": [
-        {
-          "bank": 10,
-          "age": 2,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 34,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 2, "step": 1, "count": 32},
+        {"bank": 11, "age": 34, "step": 1, "count": 32}
       ],
       "read_release": 63,
       "write_release": 65,
@@ -82,44 +44,14 @@
     },
     "sub": {
       "reads": [
-        {
-          "bank": 2,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 6,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 7,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 2, "age": 0, "step": 1, "count": 32},
+        {"bank": 3, "age": 32, "step": 1, "count": 32},
+        {"bank": 6, "age": 0, "step": 1, "count": 32},
+        {"bank": 7, "age": 32, "step": 1, "count": 32}
       ],
       "writes": [
-        {
-          "bank": 10,
-          "age": 2,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 34,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 2, "step": 1, "count": 32},
+        {"bank": 11, "age": 34, "step": 1, "count": 32}
       ],
       "read_release": 63,
       "write_release": 65,
@@ -127,44 +59,14 @@
     },
     "mul": {
       "reads": [
-        {
-          "bank": 2,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 6,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 7,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 2, "age": 0, "step": 1, "count": 32},
+        {"bank": 3, "age": 32, "step": 1, "count": 32},
+        {"bank": 6, "age": 0, "step": 1, "count": 32},
+        {"bank": 7, "age": 32, "step": 1, "count": 32}
       ],
       "writes": [
-        {
-          "bank": 10,
-          "age": 2,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 34,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 2, "step": 1, "count": 32},
+        {"bank": 11, "age": 34, "step": 1, "count": 32}
       ],
       "read_release": 63,
       "write_release": 65,
@@ -172,32 +74,12 @@
     },
     "rcp": {
       "reads": [
-        {
-          "bank": 2,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 2, "age": 0, "step": 1, "count": 32},
+        {"bank": 3, "age": 32, "step": 1, "count": 32}
       ],
       "writes": [
-        {
-          "bank": 10,
-          "age": 2,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 34,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 2, "step": 1, "count": 32},
+        {"bank": 11, "age": 34, "step": 1, "count": 32}
       ],
       "read_release": 63,
       "write_release": 65,
@@ -205,32 +87,12 @@
     },
     "sqrt": {
       "reads": [
-        {
-          "bank": 2,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 2, "age": 0, "step": 1, "count": 32},
+        {"bank": 3, "age": 32, "step": 1, "count": 32}
       ],
       "writes": [
-        {
-          "bank": 10,
-          "age": 2,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 34,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 2, "step": 1, "count": 32},
+        {"bank": 11, "age": 34, "step": 1, "count": 32}
       ],
       "read_release": 63,
       "write_release": 65,
@@ -238,32 +100,12 @@
     },
     "sin": {
       "reads": [
-        {
-          "bank": 2,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 2, "age": 0, "step": 1, "count": 32},
+        {"bank": 3, "age": 32, "step": 1, "count": 32}
       ],
       "writes": [
-        {
-          "bank": 10,
-          "age": 2,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 34,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 2, "step": 1, "count": 32},
+        {"bank": 11, "age": 34, "step": 1, "count": 32}
       ],
       "read_release": 63,
       "write_release": 65,
@@ -271,32 +113,12 @@
     },
     "cos": {
       "reads": [
-        {
-          "bank": 2,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 2, "age": 0, "step": 1, "count": 32},
+        {"bank": 3, "age": 32, "step": 1, "count": 32}
       ],
       "writes": [
-        {
-          "bank": 10,
-          "age": 2,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 34,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 2, "step": 1, "count": 32},
+        {"bank": 11, "age": 34, "step": 1, "count": 32}
       ],
       "read_release": 63,
       "write_release": 65,
@@ -304,32 +126,12 @@
     },
     "tanh": {
       "reads": [
-        {
-          "bank": 2,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 2, "age": 0, "step": 1, "count": 32},
+        {"bank": 3, "age": 32, "step": 1, "count": 32}
       ],
       "writes": [
-        {
-          "bank": 10,
-          "age": 2,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 34,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 2, "step": 1, "count": 32},
+        {"bank": 11, "age": 34, "step": 1, "count": 32}
       ],
       "read_release": 63,
       "write_release": 65,
@@ -337,32 +139,12 @@
     },
     "log": {
       "reads": [
-        {
-          "bank": 2,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 2, "age": 0, "step": 1, "count": 32},
+        {"bank": 3, "age": 32, "step": 1, "count": 32}
       ],
       "writes": [
-        {
-          "bank": 10,
-          "age": 2,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 34,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 2, "step": 1, "count": 32},
+        {"bank": 11, "age": 34, "step": 1, "count": 32}
       ],
       "read_release": 63,
       "write_release": 65,
@@ -370,32 +152,12 @@
     },
     "exp": {
       "reads": [
-        {
-          "bank": 2,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 2, "age": 0, "step": 1, "count": 32},
+        {"bank": 3, "age": 32, "step": 1, "count": 32}
       ],
       "writes": [
-        {
-          "bank": 10,
-          "age": 2,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 34,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 2, "step": 1, "count": 32},
+        {"bank": 11, "age": 34, "step": 1, "count": 32}
       ],
       "read_release": 63,
       "write_release": 65,
@@ -403,32 +165,12 @@
     },
     "exp2": {
       "reads": [
-        {
-          "bank": 2,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 2, "age": 0, "step": 1, "count": 32},
+        {"bank": 3, "age": 32, "step": 1, "count": 32}
       ],
       "writes": [
-        {
-          "bank": 10,
-          "age": 2,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 34,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 2, "step": 1, "count": 32},
+        {"bank": 11, "age": 34, "step": 1, "count": 32}
       ],
       "read_release": 63,
       "write_release": 65,
@@ -436,32 +178,12 @@
     },
     "square": {
       "reads": [
-        {
-          "bank": 2,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 2, "age": 0, "step": 1, "count": 32},
+        {"bank": 3, "age": 32, "step": 1, "count": 32}
       ],
       "writes": [
-        {
-          "bank": 10,
-          "age": 2,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 34,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 2, "step": 1, "count": 32},
+        {"bank": 11, "age": 34, "step": 1, "count": 32}
       ],
       "read_release": 63,
       "write_release": 65,
@@ -469,32 +191,12 @@
     },
     "cube": {
       "reads": [
-        {
-          "bank": 2,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 2, "age": 0, "step": 1, "count": 32},
+        {"bank": 3, "age": 32, "step": 1, "count": 32}
       ],
       "writes": [
-        {
-          "bank": 10,
-          "age": 2,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 34,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 2, "step": 1, "count": 32},
+        {"bank": 11, "age": 34, "step": 1, "count": 32}
       ],
       "read_release": 63,
       "write_release": 65,
@@ -502,32 +204,12 @@
     },
     "rsum": {
       "reads": [
-        {
-          "bank": 2,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 2, "age": 0, "step": 1, "count": 32},
+        {"bank": 3, "age": 0, "step": 1, "count": 32}
       ],
       "writes": [
-        {
-          "bank": 10,
-          "age": 7,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 7,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 7, "step": 1, "count": 32},
+        {"bank": 11, "age": 7, "step": 1, "count": 32}
       ],
       "read_release": 31,
       "write_release": 38,
@@ -535,44 +217,14 @@
     },
     "csum": {
       "reads": [
-        {
-          "bank": 2,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 2,
-          "age": 64,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 96,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 2, "age": 0, "step": 1, "count": 32},
+        {"bank": 2, "age": 64, "step": 1, "count": 32},
+        {"bank": 3, "age": 32, "step": 1, "count": 32},
+        {"bank": 3, "age": 96, "step": 1, "count": 32}
       ],
       "writes": [
-        {
-          "bank": 10,
-          "age": 66,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 98,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 66, "step": 1, "count": 32},
+        {"bank": 11, "age": 98, "step": 1, "count": 32}
       ],
       "read_release": 127,
       "write_release": 129,
@@ -580,26 +232,11 @@
     },
     "fp8pack": {
       "reads": [
-        {
-          "bank": 6,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 7,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 6, "age": 0, "step": 1, "count": 32},
+        {"bank": 7, "age": 32, "step": 1, "count": 32}
       ],
       "writes": [
-        {
-          "bank": 10,
-          "age": 3,
-          "step": 2,
-          "count": 32
-        }
+        {"bank": 10, "age": 3, "step": 2, "count": 32}
       ],
       "read_release": 63,
       "write_release": 65,
@@ -607,26 +244,11 @@
     },
     "fp8unpack": {
       "reads": [
-        {
-          "bank": 6,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 6, "age": 0, "step": 1, "count": 32}
       ],
       "writes": [
-        {
-          "bank": 10,
-          "age": 3,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 35,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 3, "step": 1, "count": 32},
+        {"bank": 11, "age": 35, "step": 1, "count": 32}
       ],
       "read_release": 31,
       "write_release": 66,
@@ -634,32 +256,12 @@
     },
     "relu": {
       "reads": [
-        {
-          "bank": 2,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 2, "age": 0, "step": 1, "count": 32},
+        {"bank": 3, "age": 32, "step": 1, "count": 32}
       ],
       "writes": [
-        {
-          "bank": 10,
-          "age": 2,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 34,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 2, "step": 1, "count": 32},
+        {"bank": 11, "age": 34, "step": 1, "count": 32}
       ],
       "read_release": 63,
       "write_release": 65,
@@ -667,32 +269,12 @@
     },
     "rmax": {
       "reads": [
-        {
-          "bank": 2,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 2, "age": 0, "step": 1, "count": 32},
+        {"bank": 3, "age": 0, "step": 1, "count": 32}
       ],
       "writes": [
-        {
-          "bank": 10,
-          "age": 2,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 2,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 2, "step": 1, "count": 32},
+        {"bank": 11, "age": 2, "step": 1, "count": 32}
       ],
       "read_release": 31,
       "write_release": 33,
@@ -700,32 +282,12 @@
     },
     "rmin": {
       "reads": [
-        {
-          "bank": 2,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 2, "age": 0, "step": 1, "count": 32},
+        {"bank": 3, "age": 0, "step": 1, "count": 32}
       ],
       "writes": [
-        {
-          "bank": 10,
-          "age": 2,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 2,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 2, "step": 1, "count": 32},
+        {"bank": 11, "age": 2, "step": 1, "count": 32}
       ],
       "read_release": 31,
       "write_release": 33,
@@ -733,44 +295,14 @@
     },
     "cmax": {
       "reads": [
-        {
-          "bank": 2,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 2,
-          "age": 64,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 96,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 2, "age": 0, "step": 1, "count": 32},
+        {"bank": 2, "age": 64, "step": 1, "count": 32},
+        {"bank": 3, "age": 32, "step": 1, "count": 32},
+        {"bank": 3, "age": 96, "step": 1, "count": 32}
       ],
       "writes": [
-        {
-          "bank": 10,
-          "age": 66,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 98,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 66, "step": 1, "count": 32},
+        {"bank": 11, "age": 98, "step": 1, "count": 32}
       ],
       "read_release": 127,
       "write_release": 129,
@@ -778,44 +310,14 @@
     },
     "cmin": {
       "reads": [
-        {
-          "bank": 2,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 2,
-          "age": 64,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 96,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 2, "age": 0, "step": 1, "count": 32},
+        {"bank": 2, "age": 64, "step": 1, "count": 32},
+        {"bank": 3, "age": 32, "step": 1, "count": 32},
+        {"bank": 3, "age": 96, "step": 1, "count": 32}
       ],
       "writes": [
-        {
-          "bank": 10,
-          "age": 66,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 98,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 66, "step": 1, "count": 32},
+        {"bank": 11, "age": 98, "step": 1, "count": 32}
       ],
       "read_release": 127,
       "write_release": 129,
@@ -823,44 +325,14 @@
     },
     "pairmax": {
       "reads": [
-        {
-          "bank": 2,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 6,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 7,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 2, "age": 0, "step": 1, "count": 32},
+        {"bank": 3, "age": 32, "step": 1, "count": 32},
+        {"bank": 6, "age": 0, "step": 1, "count": 32},
+        {"bank": 7, "age": 32, "step": 1, "count": 32}
       ],
       "writes": [
-        {
-          "bank": 10,
-          "age": 2,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 34,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 2, "step": 1, "count": 32},
+        {"bank": 11, "age": 34, "step": 1, "count": 32}
       ],
       "read_release": 63,
       "write_release": 65,
@@ -868,44 +340,14 @@
     },
     "pairmin": {
       "reads": [
-        {
-          "bank": 2,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 6,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 7,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 2, "age": 0, "step": 1, "count": 32},
+        {"bank": 3, "age": 32, "step": 1, "count": 32},
+        {"bank": 6, "age": 0, "step": 1, "count": 32},
+        {"bank": 7, "age": 32, "step": 1, "count": 32}
       ],
       "writes": [
-        {
-          "bank": 10,
-          "age": 2,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 34,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 2, "step": 1, "count": 32},
+        {"bank": 11, "age": 34, "step": 1, "count": 32}
       ],
       "read_release": 63,
       "write_release": 65,
@@ -913,32 +355,12 @@
     },
     "mov": {
       "reads": [
-        {
-          "bank": 2,
-          "age": 0,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 3,
-          "age": 32,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 2, "age": 0, "step": 1, "count": 32},
+        {"bank": 3, "age": 32, "step": 1, "count": 32}
       ],
       "writes": [
-        {
-          "bank": 10,
-          "age": 2,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 34,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 2, "step": 1, "count": 32},
+        {"bank": 11, "age": 34, "step": 1, "count": 32}
       ],
       "read_release": 63,
       "write_release": 65,
@@ -947,12 +369,7 @@
     "vliOne": {
       "reads": [],
       "writes": [
-        {
-          "bank": 10,
-          "age": 1,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 1, "step": 1, "count": 32}
       ],
       "read_release": -1,
       "write_release": 32,
@@ -961,12 +378,7 @@
     "vliCol": {
       "reads": [],
       "writes": [
-        {
-          "bank": 10,
-          "age": 1,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 1, "step": 1, "count": 32}
       ],
       "read_release": -1,
       "write_release": 32,
@@ -975,18 +387,8 @@
     "vliRow": {
       "reads": [],
       "writes": [
-        {
-          "bank": 10,
-          "age": 1,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 33,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 1, "step": 1, "count": 32},
+        {"bank": 11, "age": 33, "step": 1, "count": 32}
       ],
       "read_release": -1,
       "write_release": 64,
@@ -995,18 +397,8 @@
     "vliAll": {
       "reads": [],
       "writes": [
-        {
-          "bank": 10,
-          "age": 1,
-          "step": 1,
-          "count": 32
-        },
-        {
-          "bank": 11,
-          "age": 33,
-          "step": 1,
-          "count": 32
-        }
+        {"bank": 10, "age": 1, "step": 1, "count": 32},
+        {"bank": 11, "age": 33, "step": 1, "count": 32}
       ],
       "read_release": -1,
       "write_release": 64,

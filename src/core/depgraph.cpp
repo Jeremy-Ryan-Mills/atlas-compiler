@@ -48,9 +48,7 @@ std::runtime_error dmaError(const Instr& in, const std::string& reason) {
                               "): RTL DMA " + reason);
 }
 
-// A transfer's memory lifetime ends at an explicit matching wait, never at the
-// estimated dmaCycles. Issue operands have already been captured by hardware.
-// With incoming CFG state, a lifetime may continue into a successor block.
+// Memory stays live until a matching wait, including across CFG edges.
 void addRtlDmaEdges(DepGraph& g, EdgeSet& edges, const MachineModel& model, const IncomingDma* incoming) {
     const int n = (int)g.nodes.size();
     std::array<int, 8> pending;
@@ -76,9 +74,7 @@ void addRtlDmaEdges(DepGraph& g, EdgeSet& edges, const MachineModel& model, cons
         if (d >= 0 && !incoming)
             throw dmaError(g.nodes[d], "transfer requires an explicit matching DMA.WAIT in the same block");
 
-    // Enqueue has no ready signal. Launch order is preserved, so command i uses
-    // the same ring slot as command i-8. A count of outstanding commands alone
-    // cannot establish that this particular slot has retired.
+    // No enqueue backpressure: command i must wait for ring slot i-8 to retire.
     for (size_t i = 8; i < launches.size(); i++) {
         const int previous = launches[i - 8], current = launches[i];
         if (waits[previous] < 0 || waits[previous] >= current)

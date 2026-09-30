@@ -3,18 +3,10 @@
   "config": "EE290SimConfig",
   "status": "scalar_control_composed_with_preserved_vector_evidence",
   "inputs": {
-    "hardware_ir": {
-      "sha256": "d2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2"
-    },
-    "typed_output": {
-      "sha256": "3eb7f807419a5af1742801ebd00b3c02edb1b508952cc1ce2cac5a313646633b"
-    },
-    "extractor": {
-      "sha256": "a61acbc71bc16af0fd2caed16e83801fdb55c9f32673c9cd9713c632abe60aad"
-    },
-    "typed_query": {
-      "sha256": "74972918c719c51e9ac64169c8814f2bdcdbda4fa48ed5bcf43accbda8c8f096"
-    }
+    "hardware_ir": {"sha256": "d2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2"},
+    "typed_output": {"sha256": "3eb7f807419a5af1742801ebd00b3c02edb1b508952cc1ce2cac5a313646633b"},
+    "extractor": {"sha256": "a61acbc71bc16af0fd2caed16e83801fdb55c9f32673c9cd9713c632abe60aad"},
+    "typed_query": {"sha256": "74972918c719c51e9ac64169c8814f2bdcdbda4fa48ed5bcf43accbda8c8f096"}
   },
   "compiler_overrides": {
     "rows": 32,
@@ -35,9 +27,7 @@
     "config": "EE290SimConfig",
     "status": "typed_conditional_facts_rechecked",
     "inputs": {
-      "hardware_ir": {
-        "sha256": "d2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2"
-      }
+      "hardware_ir": {"sha256": "d2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2"}
     },
     "compiler_overrides": {
       "rows": 32,
@@ -63,69 +53,27 @@
   },
   "scalar_events": {
     "load": {
-      "io_scalarMemCmd_valid": [
-        1
-      ],
-      "memLoadPending": [
-        1,
-        2
-      ],
-      "memLoadRespValid": [
-        3
-      ],
-      "isMemLoadWB": [
-        3
-      ],
-      "io_vmemScalarRead_valid": [
-        1
-      ],
-      "io_scalarResp_valid": [
-        2
-      ],
-      "io_scalarBusy": [
-        2
-      ]
+      "io_scalarMemCmd_valid": [1],
+      "memLoadPending": [1, 2],
+      "memLoadRespValid": [3],
+      "isMemLoadWB": [3],
+      "io_vmemScalarRead_valid": [1],
+      "io_scalarResp_valid": [2],
+      "io_scalarBusy": [2]
     },
     "scale_load": {
-      "io_scalarMemCmd_valid": [
-        1
-      ],
-      "memLoadPending": [
-        1,
-        2
-      ],
-      "memLoadRespValid": [
-        3
-      ],
-      "seldWriteEn": [
-        3
-      ],
-      "io_vmemScalarRead_valid": [
-        1
-      ],
-      "io_scalarResp_valid": [
-        2
-      ],
-      "io_scalarBusy": [
-        2
-      ]
+      "io_scalarMemCmd_valid": [1],
+      "memLoadPending": [1, 2],
+      "memLoadRespValid": [3],
+      "seldWriteEn": [3],
+      "io_vmemScalarRead_valid": [1],
+      "io_scalarResp_valid": [2],
+      "io_scalarBusy": [2]
     },
     "store": {
-      "io_scalarMemCmd_valid": [
-        1
-      ],
-      "io_scalarMemCmd_bits_isStore": [
-        1,
-        2,
-        3,
-        4,
-        5,
-        6,
-        7
-      ],
-      "io_vmemScalarWrite_valid": [
-        1
-      ]
+      "io_scalarMemCmd_valid": [1],
+      "io_scalarMemCmd_bits_isStore": [1, 2, 3, 4, 5, 6, 7],
+      "io_vmemScalarWrite_valid": [1]
     }
   },
   "assumptions": [

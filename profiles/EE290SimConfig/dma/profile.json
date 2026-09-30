@@ -3,9 +3,7 @@
   "config": "EE290SimConfig",
   "status": "typed_local_facts_rechecked",
   "inputs": {
-    "hardware_ir": {
-      "sha256": "d2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2"
-    }
+    "hardware_ir": {"sha256": "d2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2"}
   },
   "compiler_overrides": {
     "operand_capture": "issue",

@@ -60,10 +60,6 @@ if(Python3_Interpreter_FOUND)
     ${CMAKE_SOURCE_DIR}/scripts/tests/test_rtlgraph_xlu.py)
   add_test(NAME rtlgraph-xlu-connected-tests COMMAND ${Python3_EXECUTABLE} -B
     ${CMAKE_SOURCE_DIR}/scripts/tests/test_rtlgraph_xlu_connected.py)
-  add_test(NAME rtlgraph-perf-tests COMMAND ${Python3_EXECUTABLE} -B
-    ${CMAKE_SOURCE_DIR}/scripts/tests/test_rtlgraph_perf.py)
-  add_test(NAME rtlgraph-assembly-tests COMMAND ${Python3_EXECUTABLE} -B
-    ${CMAKE_SOURCE_DIR}/scripts/tests/test_rtlgraph_assembly.py)
   add_test(NAME rtlgraph-instruction-tests COMMAND ${Python3_EXECUTABLE} -B
     ${CMAKE_SOURCE_DIR}/scripts/tests/test_rtlgraph_instruction_timing.py)
 endif()

@@ -1,51 +1,14 @@
-# Kernel regression
+# Kernel validation results
 
-The regression compares the complete Atlas instruction stream against the handwritten kernel and a previously optimized stream, using all six checked-in `EE290SimConfig` profiles. The replay metric is the number of Atlas clock edges from the first accepted instruction to successful `DBG0` publication after all DMA channels become idle. Host programming, host output verification, simulator wall time, and raw host `mcycles` are excluded. `dbg1_cycles` remains a diagnostic because counter instructions can move between schedules.
+The measured interval runs from first accepted Atlas instruction to successful `DBG0` publication after output DMA completion. It excludes host setup/checking and simulator wall time; movable private CSR counters are diagnostic. Controlled pairs patch only a fixed-capacity Atlas instruction array in one host ELF, retaining golden data, host layout, programming work, and launch edge. Capacity must fit both programs and remain at most 1,024 words. DRAM service can still depend on launch conditions.
 
-The canonical [baremetal corpus](https://bwrcrepo.eecs.berkeley.edu/ee194-290c-sp26/sp26-atlas-acc) has 14 `perf_*.S` files. Eleven have existing nonempty external fixtures covering their output tensors. `perf_mm_single`, `perf_vpu_binary`, and `perf_vpu_reduction` need separate output instrumentation; results for instrumented probes must be distinguished from the original kernels.
+The corpus is in [Atlas NPU baremetal](https://github.com/ucb-bar/atlas-npu/tree/main/baremetal). Eleven original `perf_*.S` kernels have full-output goldens; three others require additional instrumentation. The [archived evidence](https://github.com/Jeremy-Ryan-Mills/atlas-compiler/tree/644992119b9527d8dad019200f80a80d9e0ffee4/profiles/EE290SimConfig/validation) records inputs, hashes, controls, and individual runs. These are recorded results, not new executions during documentation cleanup. Common [evidence limits](rtlgraph-model.md#evidence-and-assumptions) apply.
 
-[`rtlgraph_perf.py`](../scripts/rtlgraph_perf.py) uses the recorded cached simulator and checks its binary, runtime, toolchain, and DRAM configuration hashes. For a controlled comparison, it compiles one host program with a fixed-capacity Atlas instruction array. Candidate replays patch only that array in the same ELF. Padding follows the terminal `ECALL` and is not executed. The host code, golden data, ELF layout, and instruction-memory programming work remain identical, and the comparison also checks the Atlas launch edge. Variable DRAM behavior still prevents interpreting a finite execution as a universal latency bound.
+## Original kernels
 
-For a native compiler candidate from a straight-line baremetal kernel, normalize only its unreachable suffix and unused labels, then schedule and check the final emitted stream. This adapter also checks encoded instruction preservation. Set `insert_waits=True` to remove handwritten waits and regenerate them with the selected model.
+The regression records 29 RTL executions and 35,328 checked 32-bit words; an audit matched all 5,055 accepted instruction PCs/words to assembled programs. All six profiles and default critical-path scheduling produce the following results at historical fixed-host capacities:
 
-```python
-from pathlib import Path
-from rtlgraph_assembly import load_assembler, prepare, straight_line_prefix
-
-baremetal = Path("/path/to/sp26-atlas-acc/baremetal")
-assembler = baremetal / "assembler.py"
-source = baremetal / "assembly/perf_unary.S"
-Path("before.S").write_text(straight_line_prefix(source.read_text(), load_assembler(assembler)))
-profiles = {role: Path(f"profiles/EE290SimConfig/{role}/atlas-{role}.profile")
-            for role in ("dma", "lsu", "vpu", "xlu", "mxu0", "mxu1")}
-prepare("before.S", assembler, "build/atlas-opt", "build/candidate",
-        profiles=profiles, insert_waits=False)
-```
-
-Run the Python snippet with `PYTHONPATH=scripts`; its output is `build/candidate/candidate.S`. The following commands replay `before.S` and that candidate (named `after.S` below) against the same fixture:
-
-```sh
-source /tools/C/ee194-sp26/bwrc-env.sh
-python3 -B scripts/rtlgraph_perf.py \
-  --smoke-manifest build/rtlgraph-smoke/run-3/manifest.json \
-  --assembly before.S --golden-json fixture.json \
-  --output build/replay-before --capacity 512
-python3 -B scripts/rtlgraph_perf.py \
-  --smoke-manifest build/rtlgraph-smoke/run-3/manifest.json \
-  --assembly after.S --golden-json fixture.json \
-  --output build/replay-after \
-  --control-manifest build/replay-before/manifest.json
-```
-
-The capacity must fit both programs and cannot exceed 1024 words. `--capacity 0` supports branch/loop witnesses without a fixed-host performance claim. `--witness-manifest` additionally checks the compiler, selected profile, generator, native input/output, baremetal input, and golden identities recorded by the DMA witness generator.
-
-## Results
-
-The [recorded regression](../profiles/EE290SimConfig/validation/perf-corpus.json) contains 29 actual RTL executions and 35,328 checked 32-bit output words. The current compiler (`43de1db`) emits exactly the previous combined-model instruction streams for all eleven default schedules; matching encoded streams share replay evidence rather than being counted as extra executions. A separate post-execution audit matched all 5,055 accepted instruction PCs and words to the assembled programs.
-
-The table uses the historical fixed-host capacities. Every row compares one shared host and launch condition, with all six profiles selected and the default critical-path scheduling priority.
-
-| Kernel | Handwritten edges | Current default edges | Saved |
+| Kernel | Handwritten edges | Scheduled edges | Saved |
 | --- | ---: | ---: | ---: |
 | `perf_fused_attention_mxu0.S` | 25,445 | 22,132 | 3,313 |
 | `perf_fused_attention_mxu1.S` | 24,932 | 22,136 | 2,796 |
@@ -59,30 +22,22 @@ The table uses the historical fixed-host capacities. Every row compares one shar
 | `perf_vec_layernorm_32x32.S` | 4,608 | 4,593 | 15 |
 | `perf_vec_rmsnorm_softmax.S` | 8,459 | 7,554 | 905 |
 
-These defaults are not always the fastest known schedules. Restored `--schedule-priority input` reproduces the dual-MXU stream that takes 41,093 edges, saving another 458. Selecting only the DMA profile reproduces the fused-MXU1 stream that takes 22,132 edges, four fewer than the combined model. Both alternative instruction streams were freshly replayed and reproduced by the final compiler. Profile coverage and scheduling priority are separate choices; neither guarantees an optimum.
+Input-order priority improves dual-MXU to 41,093 edges, saving another 458. DMA-only profiling gives fused-MXU1 22,132 edges, four fewer than the combined model despite a longer modeled compute window. Both alternatives were replayed. Local resource gains and list-scheduler priorities therefore need whole-kernel measurement.
 
-**Layernorm regresses in a second controlled environment.** Changing the fixed host capacity from 128 words to 64 changes host programming/layout and memory-system conditions. The Atlas instruction words remain identical, and both sides still share their host within each pair:
+Layernorm changes from 4,803 to 4,830 edges with a 64-word host capacity, while the 128-word control above saves 15. Softmax changes from 4,643 to 4,639 at 64 words. Within each pair, host and launch conditions match; Atlas words are unchanged across capacities. The phase audit finds output DMA launches 74 edges earlier in both layernorm controls, then takes 102 extra edges at 64 words or 60 extra at 128, with one fewer publication edge. These sum to the 27-edge regression and 15-edge improvement. Input-order priority also takes 4,830 at 64 words. Traces identify the DMA phase responsible but contain insufficient memory request/response state to establish its cause.
 
-| Kernel at 64-word capacity | Handwritten edges | Current default edges | Saved |
-| --- | ---: | ---: | ---: |
-| `perf_softmax.S` | 4,643 | 4,639 | 4 |
-| `perf_vec_layernorm_32x32.S` | 4,803 | 4,830 | -27 |
+## Additional correctness coverage
 
-Input priority also takes 4,830 edges for that layernorm case. At 128 words, the corresponding improvements are 54 and 15 edges. This is measured sensitivity to the launch environment, not a change between compiler versions: the previous and current combined-model streams are identical. Performance gains are conditional on the recorded execution; static resource timing does not establish a DRAM completion bound.
+Automatic wait insertion regenerated all 139 removed handwritten waits across the eleven golden-backed kernels and passed 13,824 output-word checks. Eight emitted streams match separately replayed explicit-wait candidates; fused-attention variants and softmax received additional direct runs. Matched automatic/explicit schedules have equal completion times. This validates synchronization generation without claiming another throughput gain.
 
-The [layernorm phase audit](../profiles/EE290SimConfig/validation/layernorm-phases.json) locates the sign change in output DMA. It reuses the five existing manifests, accepted PC/word traces, and completion VCDs; no additional execution was needed. The intervals below sum exactly to first accepted instruction through `DBG0`. Input and output idle coincide with acceptance of their respective `DMA.WAIT` instructions in all five traces.
+A three-block DMA witness takes both branch outcomes, reuses captured pointer registers, and checks all 96 DRAM words for 384 bytes copied. Its first-issue-to-publication interval is 1,017 edges; its internal CSR bracket is 1,005 cycles. The [archived replay](https://github.com/Jeremy-Ryan-Mills/atlas-compiler/blob/644992119b9527d8dad019200f80a80d9e0ffee4/profiles/EE290SimConfig/dma/cfg-replay.json) records the finite correctness run.
 
-| Capacity / stream | First issue → input DMA idle | Input idle → output DMA issue | Output DMA issue → output idle | Output idle → `DBG0` | Total |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 64 / handwritten | 2,623 | 755 | 1,423 | 2 | 4,803 |
-| 64 / current default | 2,623 | 681 | 1,525 | 1 | 4,830 |
-| 128 / handwritten | 2,451 | 755 | 1,400 | 2 | 4,608 |
-| 128 / current default | 2,451 | 681 | 1,460 | 1 | 4,593 |
+Three instrumented probes add full-output observations to original sources lacking goldens. VPU probes preserve operations/branches and capture both outputs; single-matmul substitutes exact FP8 constants and adds BF16 pops/writeback. Six runs check 13,312 words:
 
-The current schedule issues the vector constant fill during input DMA and moves scalar setup earlier. Its interval from input idle through vector work and stores to output DMA issue saves 74 edges at both capacities. Output DMA then takes 102 extra edges at capacity 64 or 60 extra edges at capacity 128; one fewer publication instruction produces the observed `-74 + 102 - 1 = +27` regression and `-74 + 60 - 1 = -15` improvement. The sampled output channel busy intervals confirm that the added delay occurs while DMA is active. Input priority has a distinct encoded stream but the same phase lengths as the default at capacity 64.
+| Instrumented probe | Words/run | Original edges | Scheduled edges | Comparison scope |
+| --- | ---: | ---: | ---: | --- |
+| `perf_vpu_binary` | 2,560 | 8,353 | 8,184 | Different hosts; diagnostic |
+| `perf_vpu_reduction` | 3,072 | 10,090 | 9,905 | Different hosts; diagnostic |
+| `perf_mm_single` | 1,024 | 7,520 | 7,170 | Shared host/launch; 350 edges saved (4.65%) |
 
-This identifies the measured phase responsible for the reversal, without establishing its memory-system cause. These captures contain DMA busy flags and scalar issue events, but no memory request/response or DRAM-state events. Earlier output launch interacting with memory state is a possible explanation; the evidence cannot distinguish it from other causes of DMA service variation. The audit checks host source and ELF bytes outside the instruction array within each pair, shared launch edges, unchanged encoded streams across capacities for each variant, and replay artifact hashes. Host setup remains excluded from the metric, although its effects on the launch environment can persist.
-
-The [three supplemental probes](../profiles/EE290SimConfig/validation/perf-extra.json) cover the remaining corpus files with explicit full-output instrumentation. Their altered programs and fixtures are reported separately from the original eleven kernels.
-
-These are finite numerical and execution checks. The cached simulator's source-to-binary build linkage remains unverified. A fresh simulator build is deferred. The checked-in profile identities preserve the selected hardware model for a future Merlin handoff, without implementing that integration.
+These altered workloads establish output checks separately from the original eleven. The connected XLU/MREG/LSU witness checks 192 cases and 196,608 bytes with source overwrites and early consumers; its gap-34 overlap excludes ScalarCore and violates frontend reservations, so it is datapath evidence only. Gap 33 collides on all 32 physical rows and is rejected despite a simulator's numerical output. Higher-priority read interference loses a response. The model retains the restrictions explained in [profile semantics](rtlgraph-model.md#profile-semantics).

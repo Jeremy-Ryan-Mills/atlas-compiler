@@ -1,7 +1,7 @@
 schema=atlas-dma-profile-v2
 config=EE290SimConfig
 source_ir_sha256=d2fd900eadda35788ca85a4c0f3ad8058d7ca7c1856af4351b6bd6be6cf1fbe2
-evidence_sha256=3e8e309009238e27bb39de913e1bd1eaa5e3d5144fb9b98a5af39daab9e2afe3
+evidence_sha256=8e4b64073bcd36b6fd0bf2706432d75171db098463c7d374f61fc8486d06eee9
 operand_capture=issue
 config_update=issue
 vmem_word_address_low_bit=3

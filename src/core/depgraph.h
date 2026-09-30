@@ -23,11 +23,8 @@ struct DepGraph {
     std::vector<std::vector<int>> in, out;  // edge indices entering / leaving each node
 };
 
-// `dmaRegs` is a bit mask of x registers read by DMA commands anywhere in the
-// program. The legacy model guards their completion-time reads across blocks;
-// the RTL model captures them at launch and does not extend those reads.
-// Without CFG state, RTL DMA requires each transfer to complete in this block.
-// The scheduler supplies incoming lifetimes after whole-program validation.
+// dmaRegs guards legacy completion-time scalar reads; RTL captures them at issue.
+// Without incoming CFG state, RTL transfers must complete within this block.
 DepGraph buildGraph(const std::vector<Instr>& instrs, const RegValues& entry, uint32_t dmaRegs = 0xFFFFFFFE,
                     const MachineModel& model = {}, const IncomingDma* incoming = nullptr);
 
